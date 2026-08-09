@@ -1,0 +1,44 @@
+#!/bin/sh
+
+set -u
+
+usage() {
+	cat <<'EOF'
+Usage: dwr921-qmi-readonly [/dev/cdc-wdmN]
+
+Run one bounded, read-only QMI CTL version probe. No network session, service
+client allocation or modem state change is attempted.
+EOF
+}
+
+case "${1:-}" in
+	-h|--help)
+		usage
+		exit 0
+		;;
+esac
+
+device="${1:-/dev/cdc-wdm0}"
+if [ ! -c "$device" ]; then
+	echo "device=$device status=missing" >&2
+	exit 1
+fi
+
+if ! command -v uqmi >/dev/null 2>&1; then
+	echo "dwr921-qmi-readonly: uqmi is required" >&2
+	exit 1
+fi
+
+date
+uptime
+ls -l "$device"
+fuser "$device" 2>/dev/null || true
+dmesg | tail -n 40
+
+uqmi -d "$device" --timeout 15000 --get-versions 2>&1
+result=$?
+echo "uqmi_rc=$result"
+
+dmesg | tail -n 80
+logread | grep 'DWR921-QMI-CTL' || true
+exit "$result"

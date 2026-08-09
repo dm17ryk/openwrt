@@ -1,0 +1,413 @@
+--- a/uqmi/uqmi.h
++++ b/uqmi/uqmi.h
+@@ -23,6 +23,7 @@
+ #define __UQMI_H
+ 
+ #include <stdbool.h>
++#include <stddef.h>
+ 
+ #include <libubox/uloop.h>
+ #include <libubox/ustream.h>
+@@ -69,6 +70,31 @@
+ struct qmi_request;
+ struct qmi_msg;
+ 
++#ifdef DWR921_QMI_CTL_TRACE
++void dwr921_qmi_ctl_trace_event(const char *event);
++void dwr921_qmi_ctl_trace_result(const char *where, int ret);
++void dwr921_qmi_ctl_trace_frame(const char *direction, const void *frame,
++				 size_t frame_len, size_t buffer_len,
++				 const char *reason);
++void dwr921_qmi_ctl_trace_match(const char *reason,
++					uint8_t expected_service, uint8_t observed_service,
++					uint8_t expected_client, uint8_t observed_client,
++					uint16_t expected_tid, uint16_t observed_tid);
++#else
++static inline void dwr921_qmi_ctl_trace_event(const char *event) {}
++static inline void dwr921_qmi_ctl_trace_result(const char *where, int ret) {}
++static inline void dwr921_qmi_ctl_trace_frame(const char *direction,
++					       const void *frame, size_t frame_len,
++					       size_t buffer_len, const char *reason) {}
++static inline void dwr921_qmi_ctl_trace_match(const char *reason,
++					      uint8_t expected_service,
++					      uint8_t observed_service,
++					      uint8_t expected_client,
++					      uint8_t observed_client,
++					      uint16_t expected_tid,
++					      uint16_t observed_tid) {}
++#endif
++
+ typedef void (*request_cb)(struct qmi_dev *qmi, struct qmi_request *req, struct qmi_msg *msg);
+ 
+ struct qmi_dev {
+--- a/uqmi/dev.c
++++ b/uqmi/dev.c
+@@ -25,6 +25,7 @@
+ #include <stdio.h>
+ #include <string.h>
+ #include <strings.h>
++#include <time.h>
+ #include "uqmi.h"
+ #include "qmi-errors.h"
+ #include "qmi-errors.c"
+@@ -32,6 +33,197 @@
+ 
+ bool cancel_all_requests = false;
+ 
++enum {
++	DWR921_TRACE_MARKER = 0,
++	DWR921_TRACE_QMUX_LEN = 1,
++	DWR921_TRACE_QMUX_FLAGS = 3,
++	DWR921_TRACE_SERVICE = 4,
++	DWR921_TRACE_CLIENT = 5,
++	DWR921_TRACE_CTL_FLAGS = 6,
++	DWR921_TRACE_CTL_TRANSACTION = 7,
++	DWR921_TRACE_CTL_MESSAGE = 8,
++	DWR921_TRACE_CTL_TLV_LEN = 10,
++	DWR921_TRACE_CTL_TLV = 12,
++	DWR921_TRACE_CTL_HEADER = 12,
++};
++
++#ifdef DWR921_QMI_CTL_TRACE
++static uint16_t dwr921_trace_le16(const uint8_t *p)
++{
++	return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
++}
++
++static void dwr921_trace_prefix(void)
++{
++	struct timespec ts;
++
++	if (clock_gettime(CLOCK_MONOTONIC, &ts)) {
++		fprintf(stderr, "DWR921-QMI-CTL: timestamp=unavailable ");
++		return;
++	}
++
++	fprintf(stderr, "DWR921-QMI-CTL: %lld.%03ld ",
++		(long long)ts.tv_sec, ts.tv_nsec / 1000000L);
++}
++
++void dwr921_qmi_ctl_trace_event(const char *event)
++{
++	dwr921_trace_prefix();
++	fprintf(stderr, "%s\n", event);
++}
++
++void dwr921_qmi_ctl_trace_result(const char *where, int ret)
++{
++	dwr921_trace_prefix();
++	fprintf(stderr, "%s=%d\n", where, ret);
++}
++
++void dwr921_qmi_ctl_trace_match(const char *reason,
++					uint8_t expected_service, uint8_t observed_service,
++					uint8_t expected_client, uint8_t observed_client,
++					uint16_t expected_tid, uint16_t observed_tid)
++{
++	dwr921_trace_prefix();
++	fprintf(stderr,
++		"reason=%s expected_service=0x%02x observed_service=0x%02x "
++		"expected_client=0x%02x observed_client=0x%02x "
++		"expected_transaction=0x%04x observed_transaction=0x%04x\n",
++		reason, expected_service, observed_service, expected_client,
++		observed_client, expected_tid, observed_tid);
++}
++
++void dwr921_qmi_ctl_trace_frame(const char *direction, const void *frame,
++					size_t frame_len, size_t buffer_len,
++					const char *reason)
++{
++	const uint8_t *data = frame;
++	uint16_t declared_qmux_len = 0;
++	size_t declared_frame_len = 0;
++	size_t actual_len = frame_len;
++	uint8_t marker = 0;
++	uint8_t qmux_flags = 0;
++	uint8_t service = 0xff;
++	uint8_t client = 0xff;
++	uint8_t ctl_flags = 0xff;
++	uint8_t transaction = 0xff;
++	uint16_t message = 0;
++	uint16_t tlv_len = 0;
++	const char *length_reason = reason;
++
++	if (!data)
++		return;
++
++	if (frame_len >= DWR921_TRACE_QMUX_LEN + 2) {
++		declared_qmux_len = dwr921_trace_le16(data + DWR921_TRACE_QMUX_LEN);
++		declared_frame_len = (size_t)declared_qmux_len + 1;
++		if (declared_frame_len && declared_frame_len < actual_len)
++			actual_len = declared_frame_len;
++	}
++	if (frame_len >= DWR921_TRACE_MARKER + 1)
++		marker = data[DWR921_TRACE_MARKER];
++	if (frame_len >= DWR921_TRACE_QMUX_FLAGS + 1)
++		qmux_flags = data[DWR921_TRACE_QMUX_FLAGS];
++	if (frame_len >= DWR921_TRACE_SERVICE + 1)
++		service = data[DWR921_TRACE_SERVICE];
++	if (frame_len >= DWR921_TRACE_CLIENT + 1)
++		client = data[DWR921_TRACE_CLIENT];
++	if (frame_len >= DWR921_TRACE_CTL_FLAGS + 1)
++		ctl_flags = data[DWR921_TRACE_CTL_FLAGS];
++	if (frame_len >= DWR921_TRACE_CTL_TRANSACTION + 1)
++		transaction = data[DWR921_TRACE_CTL_TRANSACTION];
++	if (frame_len >= DWR921_TRACE_CTL_MESSAGE + 2)
++		message = dwr921_trace_le16(data + DWR921_TRACE_CTL_MESSAGE);
++	if (frame_len >= DWR921_TRACE_CTL_TLV_LEN + 2)
++		tlv_len = dwr921_trace_le16(data + DWR921_TRACE_CTL_TLV_LEN);
++
++	dwr921_trace_prefix();
++	fprintf(stderr,
++		"dir=%s actual_len=%zu buffer_len=%zu declared_qmux_len=%s%u "
++		"marker=%s%02x qmux_flags=%s%02x service=%s%02x client=%s%02x "
++		"ctl_flags=%s%02x transaction=%s%02x message=%s0x%04x "
++		"tlv_type=none tlv_len=%s%u qmi_result=na reason=%s\n",
++		direction, actual_len, buffer_len,
++		frame_len >= DWR921_TRACE_QMUX_LEN + 2 ? "" : "na",
++		declared_qmux_len,
++		frame_len >= DWR921_TRACE_MARKER + 1 ? "0x" : "na", marker,
++		frame_len >= DWR921_TRACE_QMUX_FLAGS + 1 ? "0x" : "na", qmux_flags,
++		frame_len >= DWR921_TRACE_SERVICE + 1 ? "0x" : "na", service,
++		frame_len >= DWR921_TRACE_CLIENT + 1 ? "0x" : "na", client,
++		frame_len >= DWR921_TRACE_CTL_FLAGS + 1 ? "0x" : "na", ctl_flags,
++		frame_len >= DWR921_TRACE_CTL_TRANSACTION + 1 ? "0x" : "na", transaction,
++		frame_len >= DWR921_TRACE_CTL_MESSAGE + 2 ? "" : "na", message,
++		frame_len >= DWR921_TRACE_CTL_TLV_LEN + 2 ? "" : "na", tlv_len,
++		length_reason);
++
++	if (frame_len < DWR921_TRACE_CTL_HEADER || service != QMI_SERVICE_CTL)
++		return;
++	if (marker != 1 && !strcmp(length_reason, "received"))
++		return;
++	if (!declared_frame_len || declared_frame_len > frame_len) {
++		dwr921_trace_prefix();
++		fprintf(stderr, "reason=truncated-frame declared_frame_len=%zu available=%zu\n",
++			declared_frame_len, frame_len);
++		return;
++	}
++	if (declared_frame_len < DWR921_TRACE_CTL_HEADER) {
++		dwr921_trace_prefix();
++		fprintf(stderr, "reason=qmux-length-too-short declared_frame_len=%zu minimum=%u\n",
++			declared_frame_len, DWR921_TRACE_CTL_HEADER);
++		return;
++	}
++	if (marker != 1) {
++		dwr921_trace_prefix();
++		fprintf(stderr, "reason=unexpected-qmux-marker observed=0x%02x expected=0x01\n",
++			marker);
++		return;
++	}
++
++	if ((ctl_flags & QMI_CTL_FLAG_RESPONSE) &&
++	    (ctl_flags & QMI_CTL_FLAG_INDICATION)) {
++		length_reason = "unexpected-ctl-flags";
++	}
++
++	if (tlv_len > actual_len - DWR921_TRACE_CTL_TLV) {
++		dwr921_trace_prefix();
++		fprintf(stderr, "reason=truncated-tlv-area declared_tlv_len=%u available=%zu\n",
++			tlv_len, actual_len - DWR921_TRACE_CTL_TLV);
++		tlv_len = actual_len - DWR921_TRACE_CTL_TLV;
++	}
++
++	if (tlv_len) {
++		const uint8_t *tlv_data = data + DWR921_TRACE_CTL_TLV;
++		size_t remaining = tlv_len;
++
++		while (remaining >= 3) {
++			uint8_t type = tlv_data[0];
++			uint16_t len = dwr921_trace_le16(tlv_data + 1);
++			dwr921_trace_prefix();
++			fprintf(stderr, "dir=%s service=0x00 transaction=0x%02x message=0x%04x "
++				"tlv_type=0x%02x tlv_len=%u qmi_result=",
++				direction, transaction, message, type, len);
++			if ((size_t)len > remaining - 3) {
++				fprintf(stderr, "invalid reason=truncated-tlv\n");
++				break;
++			}
++			if (type == 2 && len >= 4) {
++				uint16_t result = dwr921_trace_le16(tlv_data + 3);
++				uint16_t error = dwr921_trace_le16(tlv_data + 5);
++				if (result == 0)
++					fprintf(stderr, "0 error=0x%04x reason=%s\n", error, length_reason);
++				else
++					fprintf(stderr, "0x%04x error=0x%04x reason=%s\n", result, error, length_reason);
++			} else {
++				fprintf(stderr, "na reason=%s\n", length_reason);
++			}
++			tlv_data += 3 + len;
++			remaining -= 3 + len;
++		}
++		if (remaining)
++			dwr921_qmi_ctl_trace_event("reason=trailing-tlv-bytes");
++	}
++}
++#endif
++
+ #define __qmi_service(_n) [__##_n] = _n
+ static const uint8_t qmi_services[__QMI_SERVICE_LAST] = {
+ 	__qmi_services
+@@ -105,10 +297,12 @@
+ 	if (msg) {
+ 		tlv_buf = qmi_msg_get_tlv_buf(msg, &tlv_len);
+ 		req->ret = qmi_check_message_status(tlv_buf, tlv_len);
++		dwr921_qmi_ctl_trace_result("response-ret", req->ret);
+ 		if (req->ret)
+ 			msg = NULL;
+ 	} else {
+ 		req->ret = QMI_ERROR_CANCELLED;
++		dwr921_qmi_ctl_trace_result("request-cancelled", req->ret);
+ 	}
+ 
+ 	if (req->cb && (msg || !req->no_error_cb))
+@@ -125,6 +319,53 @@
+ 	struct qmi_request *req;
+ 	uint16_t tid;
+ 
++#ifdef DWR921_QMI_CTL_TRACE
++	uint16_t expected_tid = 0xffff;
++	uint16_t observed_tid;
++	bool pending_ctl = false;
++
++	list_for_each_entry(req, &qmi->req, list) {
++		if (req->service == QMI_SERVICE_CTL) {
++			expected_tid = req->tid;
++			pending_ctl = true;
++			break;
++		}
++	}
++	observed_tid = msg->qmux.service == QMI_SERVICE_CTL ?
++		msg->ctl.transaction : le16_to_cpu(msg->svc.transaction);
++
++	if (msg->qmux.service != QMI_SERVICE_CTL) {
++		dwr921_qmi_ctl_trace_frame("rx", msg, le16_to_cpu(msg->qmux.len) + 1,
++					   le16_to_cpu(msg->qmux.len) + 1, "non-ctl-ignored");
++		dwr921_qmi_ctl_trace_match("non-ctl-ignored", QMI_SERVICE_CTL,
++						msg->qmux.service, 0, msg->qmux.client,
++						expected_tid, observed_tid);
++	} else if (msg->qmux.client != 0) {
++		dwr921_qmi_ctl_trace_frame("rx", msg, le16_to_cpu(msg->qmux.len) + 1,
++					   le16_to_cpu(msg->qmux.len) + 1, "unexpected-client");
++		dwr921_qmi_ctl_trace_match("unmatched-client", QMI_SERVICE_CTL,
++						msg->qmux.service, 0, msg->qmux.client,
++						 expected_tid, msg->ctl.transaction);
++		return;
++	} else if (qmi_message_is_indication(msg)) {
++		dwr921_qmi_ctl_trace_frame("rx", msg, le16_to_cpu(msg->qmux.len) + 1,
++					   le16_to_cpu(msg->qmux.len) + 1, "non-response-indication");
++		dwr921_qmi_ctl_trace_match("non-response-indication", QMI_SERVICE_CTL,
++						msg->qmux.service, 0, msg->qmux.client,
++						expected_tid, observed_tid);
++	} else if (!qmi_message_is_response(msg)) {
++		dwr921_qmi_ctl_trace_frame("rx", msg, le16_to_cpu(msg->qmux.len) + 1,
++					   le16_to_cpu(msg->qmux.len) + 1, "non-response-flags");
++		dwr921_qmi_ctl_trace_match("non-response-flags", QMI_SERVICE_CTL,
++						msg->qmux.service, 0, msg->qmux.client,
++						expected_tid, observed_tid);
++	} else {
++		dwr921_qmi_ctl_trace_frame("rx", msg, le16_to_cpu(msg->qmux.len) + 1,
++					   le16_to_cpu(msg->qmux.len) + 1,
++					   pending_ctl ? "received" : "no-pending-request");
++	}
++#endif
++
+ 	if (qmi_message_is_indication(msg)) {
+ 		if (msg->qmux.service == QMI_SERVICE_CTL) {
+ 			struct qmi_msg sync_msg = {0};
+@@ -161,6 +402,12 @@
+ 		__qmi_request_complete(qmi, req, msg);
+ 		return;
+ 	}
++
++	#ifdef DWR921_QMI_CTL_TRACE
++	dwr921_qmi_ctl_trace_match(pending_ctl ? "unmatched-transaction" : "no-pending-request",
++					QMI_SERVICE_CTL, msg->qmux.service, 0, msg->qmux.client,
++					expected_tid, tid);
++	#endif
+ }
+ 
+ static void qmi_notify_read(struct ustream *us, int bytes)
+@@ -190,14 +437,26 @@
+ 				return;
+ 			}
+ 		} else {
+-			if (len < offsetof(struct qmi_msg, flags))
++			if (len < offsetof(struct qmi_msg, flags)) {
++				dwr921_qmi_ctl_trace_frame("rx", buf, len, len, "truncated-header");
+ 				return;
++			}
+ 			msg = (struct qmi_msg *) buf;
+ 			msg_len = le16_to_cpu(msg->qmux.len) + 1;
+ 		}
+ 
+-		if (len < msg_len)
++		if (len < msg_len) {
++			dwr921_qmi_ctl_trace_frame("rx", buf, len, len, "truncated-frame");
+ 			return;
++		}
++
++	#ifdef DWR921_QMI_CTL_TRACE
++		if (!qmi->is_mbim && (msg_len < DWR921_TRACE_CTL_HEADER || msg->marker != 1)) {
++			dwr921_qmi_ctl_trace_frame("rx", msg, msg_len, len, "malformed-frame");
++			ustream_consume(us, msg_len ? msg_len : 1);
++			continue;
++		}
++	#endif
+ 
+ 		qmi_process_msg(qmi, msg);
+ 		ustream_consume(us, msg_len);
+@@ -240,6 +499,8 @@
+ 	}
+ 
+ 	dump_packet("Send packet", buf, len);
++	if (!qmi->is_mbim && req->service == QMI_SERVICE_CTL)
++		dwr921_qmi_ctl_trace_frame("tx", buf, len, len, "request");
+ 	ustream_write(&qmi->sf.stream, buf, len, false);
+ 	return 0;
+ }
+--- a/uqmi/commands.c
++++ b/uqmi/commands.c
+@@ -239,6 +239,7 @@
+ 			qmi_request_start(qmi, &req, cmds[i].handler->cb);
+ 			req.no_error_cb = true;
+ 			if (qmi_request_wait(qmi, &req)) {
++				dwr921_qmi_ctl_trace_result("request-ret", req.ret);
+ 				uqmi_add_error(qmi_get_error_str(req.ret));
+ 				do_break = true;
+ 			}
+--- a/uqmi/uqmi.c
++++ b/uqmi/uqmi.c
+@@ -107,6 +107,7 @@
+ 
+ static void _request_timeout_handler(struct uloop_timeout *timeout)
+ {
++	dwr921_qmi_ctl_trace_event("timeout-triggered");
+ 	fprintf(stderr, "Request timed out\n");
+ 	handle_exit_signal(0);
+ }
+
+--- a/common/utils.c
++++ b/common/utils.c
+@@ -24,10 +24,19 @@
+ 
+ #include "utils.h"
++#include "qmi-message.h"
+ #include "qmi-errors.h"
+ #include <qmi-errors.c>
+ 
+ 
+ const char *qmi_get_error_str(int code)
+ {
+ 	int i;
+
++	switch (code) {
++	case QMI_ERROR_NO_DATA:
++		return "No data";
++	case QMI_ERROR_INVALID_DATA:
++		return "Invalid data";
++	case QMI_ERROR_CANCELLED:
++		return "Request cancelled";
++	}
+
+ 	for (i = 0; i < ARRAY_SIZE(qmi_errors); i++) {

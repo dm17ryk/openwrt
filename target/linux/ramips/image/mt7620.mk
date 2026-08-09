@@ -343,10 +343,10 @@ define Device/dlink_dwr-921-c3-uboot
   UIMAGE_NAME := DWR_921
 	DEVICE_PACKAGES += kmod-usb2 kmod-usb-ohci \
 	kmod-usb-net-qmi-wwan kmod-usb-serial-option \
-	uboot-envtools uqmi zram-swap dwr921-internet-led \
+	uboot-envtools uqmi luci-proto-qmi zram-swap dwr921-internet-led \
 	luci-light uhttpd-mod-ucode
   IMAGES += factory.bin
-  IMAGE/factory.bin := $$(sysupgrade_bin) | check-size
+  IMAGE/factory.bin := $$(sysupgrade_bin) | check-size | append-metadata
 endef
 TARGET_DEVICES += dlink_dwr-921-c3-uboot
 
