@@ -1,0 +1,181 @@
+// SPDX-License-Identifier: GPL-2.0-only OR MIT
+
+#include "mt7620n.dtsi"
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/leds/common.h>
+
+/ {
+	compatible = "dlink,dwr-921-c3-uboot", "ralink,mt7620n-soc";
+	model = "D-Link DWR-921 C3 (U-Boot)";
+
+	aliases {
+		led-boot = &led_sigstrength;
+		led-failsafe = &led_sigstrength;
+	};
+
+	keys {
+		compatible = "gpio-keys";
+
+		wps {
+			label = "wps";
+			gpios = <&gpio0 2 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_WPS_BUTTON>;
+		};
+
+		reset {
+			label = "reset";
+			gpios = <&gpio0 1 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_RESTART>;
+		};
+	};
+
+	leds {
+		compatible = "gpio-leds";
+
+		internet {
+			label = "green:internet";
+			gpios = <&gpio1 14 GPIO_ACTIVE_LOW>;
+		};
+
+		lan {
+			function = LED_FUNCTION_LAN;
+			color = <LED_COLOR_ID_GREEN>;
+			gpios = <&gpio1 15 GPIO_ACTIVE_HIGH>;
+		};
+
+		led_sigstrength: sigstrength {
+			label = "green:sigstrength";
+			gpios = <&gpio2 0 GPIO_ACTIVE_LOW>;
+		};
+
+		sigstrength_red {
+			label = "red:sigstrength";
+			gpios = <&gpio2 1 GPIO_ACTIVE_LOW>;
+		};
+
+		four_g {
+			label = "green:4g";
+			gpios = <&gpio2 2 GPIO_ACTIVE_LOW>;
+		};
+
+		three_g {
+			label = "green:3g";
+			gpios = <&gpio2 3 GPIO_ACTIVE_LOW>;
+		};
+
+		wifi {
+			label = "green:wifi";
+			gpios = <&gpio3 0 GPIO_ACTIVE_LOW>;
+		};
+	};
+
+	gpio_export {
+		compatible = "gpio-export";
+
+		lte_modem_enable {
+			gpio-export,name = "lte_modem_enable";
+			gpio-export,output = <1>;
+			gpios = <&gpio0 0 GPIO_ACTIVE_HIGH>;
+		};
+	};
+};
+
+&gpio1 {
+	status = "okay";
+};
+
+&gpio2 {
+	status = "okay";
+};
+
+&gpio3 {
+	status = "okay";
+};
+
+&spi0 {
+	status = "okay";
+
+	flash@0 {
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		spi-max-frequency = <25000000>;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			partition@0 {
+				label = "u-boot";
+				reg = <0x000000 0x030000>;
+				read-only;
+			};
+
+			partition@30000 {
+				label = "u-boot-env";
+				reg = <0x030000 0x010000>;
+			};
+
+			factory: partition@40000 {
+				label = "factory";
+				reg = <0x040000 0x010000>;
+				read-only;
+
+				nvmem-layout {
+					compatible = "fixed-layout";
+					#address-cells = <1>;
+					#size-cells = <1>;
+
+					eeprom_factory_0: eeprom@0 {
+						reg = <0x0000 0x0200>;
+					};
+
+					macaddr_factory_4: macaddr@4 {
+						compatible = "mac-base";
+						reg = <0x0004 0x0006>;
+						#nvmem-cell-cells = <1>;
+					};
+
+					macaddr_factory_28: macaddr@28 {
+						reg = <0x0028 0x0006>;
+					};
+				};
+			};
+
+			partition@50000 {
+				compatible = "denx,uimage";
+				label = "firmware";
+				reg = <0x050000 0xfb0000>;
+			};
+		};
+	};
+};
+
+&ethernet {
+	/* Factory+0x28 is the stock eth2/U-Boot MAC. */
+	nvmem-cells = <&macaddr_factory_28>;
+	nvmem-cell-names = "mac-address";
+};
+
+&wmac {
+	/* Factory begins with the MT7620 EEPROM; preserve its calibration MAC. */
+	nvmem-cells = <&eeprom_factory_0>;
+	nvmem-cell-names = "eeprom";
+};
+
+&ehci {
+	status = "okay";
+};
+
+&ohci {
+	status = "okay";
+};
+
+&state_default {
+	default {
+		groups = "spi refclk", "i2c", "ephy", "wled";
+		function = "gpio";
+	};
+};

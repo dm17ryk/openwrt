@@ -1,0 +1,10 @@
+#!/bin/sh
+
+case "$(board_name)" in
+	dlink,dwr-921-c3-uboot)
+		uci -q get uhttpd.main.ucode_prefix | grep -Fq '/cgi-bin/luci=/usr/share/ucode/luci/uhttpd.uc' || \
+			uci add_list uhttpd.main.ucode_prefix='/cgi-bin/luci=/usr/share/ucode/luci/uhttpd.uc'
+		;;
+esac
+
+exit 0

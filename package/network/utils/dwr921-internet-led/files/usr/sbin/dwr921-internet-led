@@ -1,0 +1,72 @@
+#!/bin/sh
+
+set -u
+
+LED_NAME=green:internet
+LED_SYSFS="${DWR921_INTERNET_LED_SYSFS:-/sys/class/leds/$LED_NAME}"
+TEST_MODE="${DWR921_INTERNET_LED_TEST:-0}"
+
+enabled=1
+probe_host=1.1.1.1
+interfaces="wwan0 eth0.2"
+interval=10
+timeout=2
+
+if [ "$TEST_MODE" = 1 ]; then
+	probe_host="${DWR921_INTERNET_LED_PROBE_HOST:-$probe_host}"
+	interfaces="${DWR921_INTERNET_LED_INTERFACES:-$interfaces}"
+else
+	[ "$(cat /tmp/sysinfo/board_name 2>/dev/null)" = \
+		dlink,dwr-921-c3-uboot ] || exit 0
+	. /lib/functions.sh
+	config_load dwr921-internet-led
+	config_get_bool enabled main enabled 1
+	config_get probe_host main probe_host "$probe_host"
+	config_get interfaces main interfaces "$interfaces"
+	config_get interval main interval "$interval"
+	config_get timeout main timeout "$timeout"
+fi
+
+[ "$enabled" = 1 ] || exit 0
+[ -d "$LED_SYSFS" ] || exit 1
+command -v ping >/dev/null 2>&1 || exit 1
+
+case "$interval" in
+	*[!0-9]*|'') exit 1 ;;
+esac
+[ "$interval" -ge 1 ] && [ "$interval" -le 3600 ] || exit 1
+
+case "$timeout" in
+	*[!0-9]*|'') exit 1 ;;
+esac
+[ "$timeout" -ge 1 ] && [ "$timeout" -le 10 ] || exit 1
+
+case "$probe_host" in
+	*[!0-9.]*|'') exit 1 ;;
+esac
+
+echo none > "$LED_SYSFS/trigger" 2>/dev/null || true
+
+probe_once() {
+	local device
+
+	for device in $interfaces; do
+		[ -n "$device" ] || continue
+		if ping -c 1 -W "$timeout" -I "$device" "$probe_host" \
+			>/dev/null 2>&1; then
+			echo 1 > "$LED_SYSFS/brightness"
+			return 0
+		fi
+	done
+
+	echo 0 > "$LED_SYSFS/brightness"
+	return 1
+}
+
+probe_once || true
+[ "${DWR921_INTERNET_LED_ONCE:-0}" = 1 ] && exit 0
+
+while :; do
+	sleep "$interval"
+	probe_once || true
+done

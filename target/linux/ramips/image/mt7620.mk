@@ -333,6 +333,23 @@ define Device/dlink_dwr-921-c3
 endef
 TARGET_DEVICES += dlink_dwr-921-c3
 
+define Device/dlink_dwr-921-c3-uboot
+  SOC := mt7620n
+  DEVICE_DTS := mt7620n_dlink_dwr-921-c3-uboot
+  IMAGE_SIZE := 16064k
+  DEVICE_VENDOR := D-Link
+  DEVICE_MODEL := DWR-921
+  DEVICE_VARIANT := C3 (U-Boot)
+  UIMAGE_NAME := DWR_921
+	DEVICE_PACKAGES += kmod-usb2 kmod-usb-ohci \
+	kmod-usb-net-qmi-wwan kmod-usb-serial-option \
+	uboot-envtools uqmi zram-swap dwr921-internet-led \
+	luci-light uhttpd-mod-ucode
+  IMAGES += factory.bin
+  IMAGE/factory.bin := $$(sysupgrade_bin) | check-size
+endef
+TARGET_DEVICES += dlink_dwr-921-c3-uboot
+
 define Device/dlink_dwr-922-e2
   $(Device/amit_jboot)
   SOC := mt7620n
