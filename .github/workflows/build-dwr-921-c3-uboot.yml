@@ -1,0 +1,200 @@
+name: Build DWR-921 C3 U-Boot firmware
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches:
+      - dlink-dwr-921-c3-uboot
+  pull_request:
+    branches:
+      - dlink-dwr-921-c3-uboot
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: dwr-921-c3-uboot-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+jobs:
+  build:
+    name: Build ramips/mt7620/dlink_dwr-921-c3-uboot
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    container:
+      image: ghcr.io/openwrt/buildbot/buildworker-v3.8.0:v9
+      options: --privileged --pid=host
+    env:
+      TARGET: ramips
+      SUBTARGET: mt7620
+      PROFILE: dlink_dwr-921-c3-uboot
+      FIRMWARE_PREFIX: openwrt-ramips-mt7620-dlink_dwr-921-c3-uboot
+
+    steps:
+      - name: Free disk space
+        shell: sh -c "nsenter -t 1 -a sh -e /home/runner/$(echo {0} | sed s#^/__w#work#)"
+        env:
+          DELETE_DIR: >-
+            /usr/local/lib/android
+            /usr/local/.ghcup
+            /usr/share/dotnet
+            /usr/share/swift
+        run: |
+          mkdir /empty
+          for directory in $DELETE_DIR; do
+            sudo rsync -a --delete /empty/ "$directory"
+          done
+
+      - name: Checkout source
+        uses: actions/checkout@v7
+        with:
+          path: openwrt
+          fetch-depth: 0
+
+      - name: Restore source download cache
+        uses: actions/cache@v6
+        with:
+          path: openwrt/dl
+          key: >-
+            openwrt-dl-${{ runner.os }}-${{
+              hashFiles(
+                'openwrt/feeds.conf.default',
+                'openwrt/include/kernel-version.mk',
+                'openwrt/package/**/Makefile',
+                'openwrt/target/linux/ramips/**',
+                'openwrt/toolchain/**/Makefile',
+                'openwrt/tools/**/Makefile'
+              )
+            }}
+          restore-keys: |
+            openwrt-dl-${{ runner.os }}-
+
+      - name: Fix workspace ownership
+        run: chown -R buildbot:buildbot openwrt
+
+      - name: Update and install feeds
+        working-directory: openwrt
+        shell: su buildbot -c "bash -euo pipefail {0}"
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Configure device build
+        working-directory: openwrt
+        shell: su buildbot -c "bash -euo pipefail {0}"
+        run: |
+          printf '%s\n' \
+            'CONFIG_TARGET_ramips=y' \
+            'CONFIG_TARGET_ramips_mt7620=y' \
+            'CONFIG_TARGET_ramips_mt7620_DEVICE_dlink_dwr-921-c3-uboot=y' \
+            'CONFIG_TARGET_ROOTFS_SQUASHFS=y' \
+            'CONFIG_TARGET_ROOTFS_INITRAMFS=y' \
+            > .config
+
+          make defconfig
+
+          grep -qx 'CONFIG_TARGET_ramips_mt7620_DEVICE_dlink_dwr-921-c3-uboot=y' .config
+          ./scripts/diffconfig.sh
+
+      - name: Download sources
+        working-directory: openwrt
+        shell: su buildbot -c "bash -euo pipefail {0}"
+        run: make download -j"$(nproc)" || make download -j1 V=s
+
+      - name: Build firmware
+        working-directory: openwrt
+        shell: su buildbot -c "bash -euo pipefail {0}"
+        run: make -j"$(nproc)" BUILD_LOG=1 || make -j1 V=s BUILD_LOG=1
+
+      - name: Validate and stage release files
+        working-directory: openwrt
+        shell: su buildbot -c "bash -euo pipefail {0}"
+        run: |
+          target_dir="$PWD/bin/targets/$TARGET/$SUBTARGET"
+          release_dir="$PWD/release"
+
+          rm -rf -- "$release_dir"
+          mkdir -p "$release_dir"
+
+          for suffix in \
+            initramfs-kernel.bin \
+            squashfs-factory.bin \
+            squashfs-sysupgrade.bin; do
+            image="$target_dir/$FIRMWARE_PREFIX-$suffix"
+            test -s "$image"
+            cp "$image" "$release_dir/"
+          done
+
+          for metadata in \
+            "$target_dir/$FIRMWARE_PREFIX.manifest" \
+            "$target_dir/config.buildinfo" \
+            "$target_dir/feeds.buildinfo" \
+            "$target_dir/version.buildinfo" \
+            "$target_dir/profiles.json"; do
+            test -s "$metadata"
+            cp "$metadata" "$release_dir/"
+          done
+
+          for image in "$release_dir"/*.bin; do
+            test "$(stat -c '%s' "$image")" -le "$((0xfb0000))"
+            magic="$(od -An -tx1 -N4 "$image" | tr -d '[:space:]')"
+            test "$magic" = 27051956
+            staging_dir/host/bin/dumpimage -l "$image"
+          done
+
+          extracted_metadata="$(mktemp)"
+          trap 'rm -f "$extracted_metadata"' EXIT
+          for image in \
+            "$release_dir/$FIRMWARE_PREFIX-squashfs-factory.bin" \
+            "$release_dir/$FIRMWARE_PREFIX-squashfs-sysupgrade.bin"; do
+            : > "$extracted_metadata"
+            staging_dir/host/bin/fwtool -q -i "$extracted_metadata" "$image"
+            grep -Fq 'dlink,dwr-921-c3-uboot' "$extracted_metadata"
+          done
+
+          {
+            printf 'repository=%s\n' "$GITHUB_REPOSITORY"
+            printf 'ref=%s\n' "$GITHUB_REF_NAME"
+            printf 'commit=%s\n' "$(git rev-parse HEAD)"
+            printf 'run_id=%s\n' "$GITHUB_RUN_ID"
+            printf 'build_container=%s\n' \
+              'ghcr.io/openwrt/buildbot/buildworker-v3.8.0:v9'
+            for feed in feeds/*; do
+              test -e "$feed/.git" || continue
+              printf 'feed.%s=%s\n' \
+                "$(basename "$feed")" \
+                "$(git -C "$feed" rev-parse HEAD)"
+            done
+          } > "$release_dir/build-provenance.txt"
+
+          (
+            cd "$release_dir"
+            find . -maxdepth 1 -type f ! -name sha256sums -printf '%P\0' \
+              | LC_ALL=C sort -z \
+              | xargs -0 sha256sum
+          ) > "$release_dir/sha256sums"
+
+          (
+            cd "$release_dir"
+            sha256sum --check sha256sums
+          )
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dwr-921-c3-uboot-build-logs-${{ github.sha }}
+          path: openwrt/logs
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: dwr-921-c3-uboot-firmware
+          path: openwrt/release/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
