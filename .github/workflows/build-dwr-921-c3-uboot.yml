@@ -141,7 +141,7 @@ jobs:
             test "$(stat -c '%s' "$image")" -le "$((0xfb0000))"
             magic="$(od -An -tx1 -N4 "$image" | tr -d '[:space:]')"
             test "$magic" = 27051956
-            staging_dir/host/bin/dumpimage -l "$image"
+            staging_dir/host/bin/mkimage -l "$image"
           done
 
           extracted_metadata="$(mktemp)"
