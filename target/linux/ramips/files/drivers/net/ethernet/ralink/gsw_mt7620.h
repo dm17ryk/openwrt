@@ -13,6 +13,7 @@
  */
 
 #include <linux/reset.h>
+#include <linux/mutex.h>
 
 #ifndef _RALINK_GSW_MT7620_H__
 #define _RALINK_GSW_MT7620_H__
@@ -25,6 +26,8 @@
 #define GSW_NUM_VIDS		4096
 #define GSW_NUM_PORTS		7
 #define GSW_PORT6		6
+
+struct fe_priv;
 
 #define GSW_MDIO_ACCESS		BIT(31)
 #define GSW_MDIO_READ		BIT(19)
@@ -109,6 +112,8 @@ struct mt7620_gsw {
 	bool			port4_ephy;
 	unsigned long int	autopoll;
 	u16			ephy_base;
+	/* Serializes access to the switch MDIO register. */
+	struct mutex		mdio_lock;
 };
 
 void mtk_switch_w32(struct mt7620_gsw *gsw, u32 val, unsigned reg);
@@ -128,6 +133,8 @@ u32 mt7530_mdio_r32(struct mt7620_gsw *gsw, u32 reg);
 u32 _mt7620_mii_write(struct mt7620_gsw *gsw, u32 phy_addr,
 			     u32 phy_register, u32 write_data);
 u32 _mt7620_mii_read(struct mt7620_gsw *gsw, int phy_addr, int phy_reg);
+int mt7620_mii_get_bmcr(struct mt7620_gsw *gsw, int port, u16 *bmcr);
+int mt7620_mii_set_bmcr(struct mt7620_gsw *gsw, int port, bool enable);
 void mt7620_handle_carrier(struct fe_priv *priv);
 
 #endif

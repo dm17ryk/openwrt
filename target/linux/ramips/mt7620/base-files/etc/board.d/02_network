@@ -13,7 +13,6 @@ ramips_setup_interfaces()
 	asus,rt-n12p|\
 	dlink,dwr-116-a1|\
 	dlink,dwr-921-c1|\
-	dlink,dwr-921-c3-uboot|\
 	dlink,dwr-922-e2|\
 	dovado,tiny-ac|\
 	hongdian,h8922-v30|\
@@ -34,6 +33,10 @@ ramips_setup_interfaces()
 	zyxel,keenetic-omni)
 		ucidef_add_switch "switch0" \
 			"0:lan" "1:lan" "2:lan" "3:lan" "4:wan" "6@eth0"
+		;;
+	dlink,dwr-921-c3-uboot)
+		ucidef_add_switch "switch0" \
+			"0:lan:4" "1:lan:3" "2:lan:2" "3:lan:1" "4:wan" "6@eth0"
 		;;
 	alfa-network,r36m-e4g|\
 	bolt,bl100|\

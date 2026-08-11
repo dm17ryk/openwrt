@@ -1,0 +1,64 @@
+#!/bin/sh
+
+set -eu
+
+SWITCH=${DWR921_SWITCH:-switch0}
+PORTS_FILE=${DWR921_PORTS_FILE:-/usr/share/dwr921-portctl/ports}
+
+usage() {
+	cat <<'EOF'
+Usage: dwr921-portctl {port-status|port-enable|port-disable} {lan1|lan2|lan3|lan4|wan}
+       dwr921-portctl restore-all-ports
+
+The labels map to MT7620 switch PHY ports LAN1=3, LAN2=2, LAN3=1,
+LAN4=0 and WAN=4. The CPU port and unused switch ports are not addressable.
+Changes are runtime-only and are lost on reboot.
+EOF
+}
+
+port_number() {
+	while read -r label port; do
+		[ "$label" = "$1" ] || continue
+		echo "$port"
+		return 0
+	done < "$PORTS_FILE"
+
+	echo "dwr921-portctl: invalid external port: $1" >&2
+	return 2
+}
+
+run_port() {
+	command=$1
+	label=$2
+	port=$(port_number "$label")
+
+	case "$command" in
+		port-status)
+			swconfig dev "$SWITCH" port "$port" get enable
+			;;
+		port-enable)
+			swconfig dev "$SWITCH" port "$port" set enable 1
+			;;
+		port-disable)
+			swconfig dev "$SWITCH" port "$port" set enable 0
+			;;
+		*)
+			usage >&2
+			return 2
+			;;
+	esac
+}
+
+if [ "$#" -eq 1 ] && [ "$1" = restore-all-ports ]; then
+	for label in lan1 lan2 lan3 lan4 wan; do
+		run_port port-enable "$label"
+	done
+	exit 0
+fi
+
+if [ "$#" -ne 2 ]; then
+	usage >&2
+	exit 2
+fi
+
+run_port "$1" "$2"

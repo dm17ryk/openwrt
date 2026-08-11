@@ -19,6 +19,7 @@
 #include "mtk_eth_soc.h"
 #include "gsw_mt7620.h"
 #include "mdio.h"
+#include "mt7620_bmcr.h"
 
 static int mt7620_mii_busy_wait(struct mt7620_gsw *gsw)
 {
@@ -35,8 +36,8 @@ static int mt7620_mii_busy_wait(struct mt7620_gsw *gsw)
 	return -1;
 }
 
-u32 _mt7620_mii_write(struct mt7620_gsw *gsw, u32 phy_addr,
-			     u32 phy_register, u32 write_data)
+static u32 mt7620_mii_write_unlocked(struct mt7620_gsw *gsw, u32 phy_addr,
+				     u32 phy_register, u32 write_data)
 {
 	if (mt7620_mii_busy_wait(gsw))
 		return -1;
@@ -54,7 +55,8 @@ u32 _mt7620_mii_write(struct mt7620_gsw *gsw, u32 phy_addr,
 	return 0;
 }
 
-u32 _mt7620_mii_read(struct mt7620_gsw *gsw, int phy_addr, int phy_reg)
+static u32 mt7620_mii_read_unlocked(struct mt7620_gsw *gsw, int phy_addr,
+				    int phy_reg)
 {
 	u32 d;
 
@@ -72,6 +74,72 @@ u32 _mt7620_mii_read(struct mt7620_gsw *gsw, int phy_addr, int phy_reg)
 	d = mtk_switch_r32(gsw, MT7620A_GSW_REG_PIAC) & 0xffff;
 
 	return d;
+}
+
+u32 _mt7620_mii_write(struct mt7620_gsw *gsw, u32 phy_addr,
+		      u32 phy_register, u32 write_data)
+{
+	u32 ret;
+
+	mutex_lock(&gsw->mdio_lock);
+	ret = mt7620_mii_write_unlocked(gsw, phy_addr, phy_register, write_data);
+	mutex_unlock(&gsw->mdio_lock);
+
+	return ret;
+}
+
+u32 _mt7620_mii_read(struct mt7620_gsw *gsw, int phy_addr, int phy_reg)
+{
+	u32 ret;
+
+	mutex_lock(&gsw->mdio_lock);
+	ret = mt7620_mii_read_unlocked(gsw, phy_addr, phy_reg);
+	mutex_unlock(&gsw->mdio_lock);
+
+	return ret;
+}
+
+int mt7620_mii_get_bmcr(struct mt7620_gsw *gsw, int port, u16 *bmcr)
+{
+	u32 value;
+
+	if (!gsw || port < 0 || port > 4 || !bmcr)
+		return -EINVAL;
+
+	mutex_lock(&gsw->mdio_lock);
+	value = mt7620_mii_read_unlocked(gsw, gsw->ephy_base + port, MII_BMCR);
+	mutex_unlock(&gsw->mdio_lock);
+
+	if (value == 0xffff)
+		return -EIO;
+
+	*bmcr = value;
+	return 0;
+}
+
+int mt7620_mii_set_bmcr(struct mt7620_gsw *gsw, int port, bool enable)
+{
+	u32 value;
+	int ret = 0;
+
+	if (!gsw || port < 0 || port > 4)
+		return -EINVAL;
+
+	mutex_lock(&gsw->mdio_lock);
+	value = mt7620_mii_read_unlocked(gsw, gsw->ephy_base + port, MII_BMCR);
+	if (value == 0xffff) {
+		ret = -EIO;
+		goto out;
+	}
+
+	value = mt7620_bmcr_set_enable(value, enable);
+	if (mt7620_mii_write_unlocked(gsw, gsw->ephy_base + port,
+				      MII_BMCR, value))
+		ret = -EIO;
+
+out:
+	mutex_unlock(&gsw->mdio_lock);
+	return ret;
 }
 
 int mt7620_mdio_write(struct mii_bus *bus, int phy_addr, int phy_reg, u16 val)

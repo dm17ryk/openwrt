@@ -33,6 +33,61 @@ proto_qmi_init_config() {
 	proto_config_add_defaults
 }
 
+dwr921_qmi_board() {
+	[ "$(cat /tmp/sysinfo/board_name 2>/dev/null)" = \
+		dlink,dwr-921-c3-uboot ]
+}
+
+dwr921_qmi_sync() {
+	local attempt
+
+	for attempt in 1 2 3; do
+		uqmi -s -d "$device" -t 3000 --sync > /dev/null 2>&1 && return 0
+		sleep "$attempt"
+	done
+
+	return 1
+}
+
+dwr921_qmi_publish_state() {
+	local serving_system="$1"
+	local registration radio rssi state_file state_tmp
+
+	dwr921_qmi_board || return 0
+
+	registration="$(echo "$serving_system" | \
+		jsonfilter -e '@.registration' 2>/dev/null)"
+	radio="$(echo "$serving_system" | \
+		jsonfilter -e '@.radio-interface' 2>/dev/null)"
+	rssi="$(uqmi -s -d "$device" -t 2000 --get-signal-info 2>/dev/null | \
+		jsonfilter -e '@.rssi' 2>/dev/null)"
+
+	case "$registration" in
+		registered|searching|not_registered|registration_denied|unknown) ;;
+		*) registration=unknown ;;
+	esac
+
+	case "$radio" in
+		lte|umts|wcdma|gsm|edge|gprs|unknown) ;;
+		*) radio=unknown ;;
+	esac
+
+	case "$rssi" in
+		-[0-9]|-[0-9][0-9]|-[0-9][0-9][0-9]) ;;
+		*) rssi= ;;
+	esac
+
+	state_file=/tmp/run/dwr921-qmi-state
+	state_tmp="$state_file.tmp.$$"
+	mkdir -p /tmp/run
+	(
+		umask 077
+		printf 'registration=%s\nradio=%s\nrssi=%s\n' \
+			"$registration" "$radio" "$rssi" > "$state_tmp"
+		mv "$state_tmp" "$state_file"
+	)
+}
+
 proto_qmi_setup() {
 	local interface="$1"
 
@@ -106,6 +161,17 @@ proto_qmi_setup() {
 		proto_set_available "$interface" 0
 		return 1
 	}
+
+	if dwr921_qmi_board; then
+		rm -f /tmp/run/dwr921-qmi-state
+		echo "Synchronizing QMI control channel"
+		dwr921_qmi_sync || {
+			echo "Unable to synchronize QMI control channel"
+			proto_notify_error "$interface" QMI_CTL_SYNC_FAILED
+			proto_block_restart "$interface"
+			return 1
+		}
+	fi
 
 	[ -n "$mtu" ] && {
 		echo "Setting MTU to $mtu"
@@ -254,8 +320,7 @@ proto_qmi_setup() {
 	# Go online
 	uqmi -s -d "$device" -t 1000 --set-device-operating-mode online > /dev/null 2>&1
 
-	# Set IP format
-	uqmi -s -d "$device" -t 1000 --set-data-format 802.3 > /dev/null 2>&1
+	# Set IP format. This uqmi build exposes the WDA action only.
 	uqmi -s -d "$device" -t 1000 --wda-set-data-format 802.3 > /dev/null 2>&1
 	json_load "$(uqmi -s -d "$device" -t 1000 --wda-get-data-format)"
 	json_get_var dataformat link-layer-protocol
@@ -324,6 +389,7 @@ proto_qmi_setup() {
 		return 1
 	done
 
+	dwr921_qmi_publish_state "$serving_system"
 
 	echo "Starting network $interface"
 
@@ -543,6 +609,8 @@ proto_qmi_teardown() {
 
 	local device devpath cid_4 pdh_4 cid_6 pdh_6
 	json_get_vars device devpath
+
+	dwr921_qmi_board && rm -f /tmp/run/dwr921-qmi-state
 
 	[ -n "$ctl_device" ] && device=$ctl_device
 

@@ -8,6 +8,15 @@ trap 'rm -rf "$tmpdir"' EXIT
 
 mkdir -p "$tmpdir/bin" "$tmpdir/sys/class/leds/green:internet"
 
+cat > "$tmpdir/bin/ip" <<'EOF'
+#!/bin/sh
+case "$*" in
+    *"route get"*) printf '1.1.1.1 dev %s src 192.0.2.2\n' "$DWR921_TEST_ROUTE_DEVICE" ;;
+    *) exit 1 ;;
+esac
+EOF
+chmod 755 "$tmpdir/bin/ip"
+
 cat > "$tmpdir/bin/ping" <<'EOF'
 #!/bin/sh
 device=
@@ -36,9 +45,10 @@ run_case() {
     : > "$tmpdir/ping.log"
     DWR921_INTERNET_LED_TEST=1 \
     DWR921_INTERNET_LED_ONCE=1 \
-    DWR921_INTERNET_LED_SYSFS="$tmpdir/sys/class/leds/green:internet" \
+    DWR921_LED_SYSFS_ROOT="$tmpdir/sys/class/leds" \
     DWR921_INTERNET_LED_INTERFACES="wwan0 eth0.2" \
     DWR921_INTERNET_LED_PROBE_HOST=192.0.2.1 \
+    DWR921_TEST_ROUTE_DEVICE="$success" \
     DWR921_TEST_SUCCESS="$success" \
     DWR921_TEST_PING_LOG="$tmpdir/ping.log" \
     PATH="$tmpdir/bin:$PATH" \

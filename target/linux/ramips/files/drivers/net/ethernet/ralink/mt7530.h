@@ -16,6 +16,8 @@
 #ifndef _MT7530_H__
 #define _MT7530_H__
 
+struct mt7620_gsw;
+
 #define MT7620_MIB_COUNTER_BASE_PORT	0x4000
 #define MT7620_MIB_COUNTER_PORT_OFFSET	0x100
 #define MT7620_MIB_COUNTER_BASE	0x1010
@@ -137,6 +139,7 @@
 /* Rx Event Packet Counter of Port n */
 #define MT7620_MIB_STATS_PORT_REPC2N	0x30
 
-int mt7530_probe(struct device *dev, void __iomem *base, struct mii_bus *bus, int vlan);
+int mt7530_probe(struct device *dev, void __iomem *base, struct mii_bus *bus,
+		 struct mt7620_gsw *gsw, int vlan);
 
 #endif

@@ -89,14 +89,45 @@ jobs:
             'CONFIG_TARGET_ramips=y' \
             'CONFIG_TARGET_ramips_mt7620=y' \
             'CONFIG_TARGET_ramips_mt7620_DEVICE_dlink_dwr-921-c3-uboot=y' \
+            'CONFIG_TARGET_PER_DEVICE_ROOTFS=y' \
             'CONFIG_TARGET_ROOTFS_SQUASHFS=y' \
             'CONFIG_TARGET_ROOTFS_INITRAMFS=y' \
+            'CONFIG_PACKAGE_tc-full=y' \
+            'CONFIG_PACKAGE_kmod-netem=y' \
+            'CONFIG_PACKAGE_kmod-ifb=y' \
+            'CONFIG_PACKAGE_kmod-nf-nathelper-extra=y' \
+            'CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y' \
+            'CONFIG_PACKAGE_conntrack=y' \
+            'CONFIG_PACKAGE_iperf3=y' \
+            'CONFIG_PACKAGE_socat=y' \
+            'CONFIG_PACKAGE_dnsmasq-full=y' \
+            'CONFIG_PACKAGE_wpad-openssl=y' \
+            'CONFIG_PACKAGE_hostapd-utils=y' \
+            'CONFIG_PACKAGE_wpa-cli=y' \
+            'CONFIG_PACKAGE_iw=y' \
+            'CONFIG_PACKAGE_dwr921-portctl=y' \
+            'CONFIG_PACKAGE_dnsmasq=n' \
+            'CONFIG_PACKAGE_wpad-basic-mbedtls=n' \
             > .config
 
           make defconfig
 
           grep -qx 'CONFIG_TARGET_ramips_mt7620_DEVICE_dlink_dwr-921-c3-uboot=y' .config
           ./scripts/diffconfig.sh
+
+      - name: Run offline source tests
+        working-directory: openwrt
+        shell: su buildbot -c "bash -euo pipefail {0}"
+        run: |
+          sh -n \
+            package/network/utils/dwr921-portctl/files/usr/sbin/dwr921-portctl \
+            tests/dwr921-portctl/test-portctl.sh \
+            tests/dwr921-production/test-image.sh
+          cc -std=c11 -Wall -Wextra -Werror \
+            tests/dwr921-portctl/test-bmcr.c \
+            -o /tmp/dwr921-test-bmcr
+          /tmp/dwr921-test-bmcr
+          sh tests/dwr921-portctl/test-portctl.sh
 
       - name: Download sources
         working-directory: openwrt
@@ -118,6 +149,9 @@ jobs:
           rm -rf -- "$release_dir"
           mkdir -p "$release_dir"
 
+          tests/dwr921-production/test-image.sh \
+            "$target_dir" "$FIRMWARE_PREFIX"
+
           for suffix in \
             initramfs-kernel.bin \
             squashfs-factory.bin \
@@ -135,23 +169,6 @@ jobs:
             "$target_dir/profiles.json"; do
             test -s "$metadata"
             cp "$metadata" "$release_dir/"
-          done
-
-          for image in "$release_dir"/*.bin; do
-            test "$(stat -c '%s' "$image")" -le "$((0xfb0000))"
-            magic="$(od -An -tx1 -N4 "$image" | tr -d '[:space:]')"
-            test "$magic" = 27051956
-            staging_dir/host/bin/mkimage -l "$image"
-          done
-
-          extracted_metadata="$(mktemp)"
-          trap 'rm -f "$extracted_metadata"' EXIT
-          for image in \
-            "$release_dir/$FIRMWARE_PREFIX-squashfs-factory.bin" \
-            "$release_dir/$FIRMWARE_PREFIX-squashfs-sysupgrade.bin"; do
-            : > "$extracted_metadata"
-            staging_dir/host/bin/fwtool -q -i "$extracted_metadata" "$image"
-            grep -Fq 'dlink,dwr-921-c3-uboot' "$extracted_metadata"
           done
 
           {

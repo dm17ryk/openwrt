@@ -341,14 +341,43 @@ define Device/dlink_dwr-921-c3-uboot
   DEVICE_MODEL := DWR-921
   DEVICE_VARIANT := C3 (U-Boot)
   UIMAGE_NAME := DWR_921
-	DEVICE_PACKAGES += kmod-usb2 kmod-usb-ohci \
+  DEVICE_PACKAGES += kmod-usb2 kmod-usb-ohci \
 	kmod-usb-net-qmi-wwan kmod-usb-serial-option \
 	uboot-envtools uqmi luci-proto-qmi zram-swap dwr921-internet-led \
-	luci-light uhttpd-mod-ucode
+	luci-light uhttpd-mod-ucode dwr921-portctl \
+	tc-full kmod-netem kmod-ifb kmod-nf-nathelper-extra \
+	kmod-nf-conntrack-netlink conntrack iperf3 socat \
+	dnsmasq-full wpad-openssl hostapd-utils wpa-cli iw \
+	-dnsmasq -wpad-basic-mbedtls -urngd
   IMAGES += factory.bin
+  sysupgrade_bin := append-kernel | append-rootfs | pad-rootfs
   IMAGE/factory.bin := $$(sysupgrade_bin) | check-size | append-metadata
 endef
 TARGET_DEVICES += dlink_dwr-921-c3-uboot
+
+define Device/dlink_dwr-921-c3-uboot-ramtest
+  SOC := mt7620n
+  DEVICE_DTS := mt7620n_dlink_dwr-921-c3-uboot
+  IMAGE_SIZE := 16064k
+  DEVICE_VENDOR := D-Link
+  DEVICE_MODEL := DWR-921
+  DEVICE_VARIANT := C3 (U-Boot RAM test)
+  UIMAGE_NAME := DWR_921
+  IMAGES :=
+  DEVICE_PACKAGES := kmod-usb2 kmod-usb-ohci \
+	kmod-usb-net-qmi-wwan kmod-usb-serial-option \
+    uboot-envtools uqmi swconfig kmod-rt2800-soc \
+    kmod-lib-crc-ccitt \
+    wpad-basic-mbedtls dropbear ip-full ethtool iw \
+	dwr921-portctl \
+	-dnsmasq -firewall4 -nftables -kmod-nft-offload \
+	-kmod-nft-core -kmod-nft-fib -kmod-nft-nat \
+	-kmod-nf-conntrack -kmod-nf-flow -kmod-nf-log -kmod-nf-log6 \
+	-kmod-nf-reject -kmod-nf-reject6 -kmod-nfnetlink \
+	-kmod-sched -kmod-sched-core -kmod-ppp -kmod-pppoe -kmod-pppox \
+	-odhcp6c -odhcpd-ipv6only -ppp -ppp-mod-pppoe
+endef
+TARGET_DEVICES += dlink_dwr-921-c3-uboot-ramtest
 
 define Device/dlink_dwr-922-e2
   $(Device/amit_jboot)
