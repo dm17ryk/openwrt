@@ -1,7 +1,5 @@
 #!/bin/sh
 
-set -u
-
 LED_NAME=green:internet
 LED_SYSFS_ROOT="${DWR921_LED_SYSFS_ROOT:-/sys/class/leds}"
 LED_SYSFS="${DWR921_INTERNET_LED_SYSFS:-$LED_SYSFS_ROOT/$LED_NAME}"
