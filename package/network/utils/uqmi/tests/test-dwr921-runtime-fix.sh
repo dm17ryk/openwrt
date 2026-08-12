@@ -12,6 +12,11 @@ pin_line=$(grep -n -- '--get-pin-status' "$src" | head -n 1 | cut -d: -f1)
 	exit 1
 }
 
+grep -q "radio_interface\[0\]" "$src" || {
+	echo "DWR-921 QMI radio interface must use uqmi's radio_interface array" >&2
+	exit 1
+}
+
 ! grep -q -- '--set-data-format 802.3' "$src" || {
 	echo "unsupported legacy uqmi data-format action remains" >&2
 	exit 1

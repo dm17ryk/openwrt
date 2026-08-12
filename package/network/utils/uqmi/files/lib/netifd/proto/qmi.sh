@@ -58,7 +58,7 @@ dwr921_qmi_publish_state() {
 	registration="$(echo "$serving_system" | \
 		jsonfilter -e '@.registration' 2>/dev/null)"
 	radio="$(echo "$serving_system" | \
-		jsonfilter -e '@.radio-interface' 2>/dev/null)"
+		jsonfilter -e '@.radio_interface[0]' 2>/dev/null)"
 	rssi="$(uqmi -s -d "$device" -t 2000 --get-signal-info 2>/dev/null | \
 		jsonfilter -e '@.rssi' 2>/dev/null)"
 
