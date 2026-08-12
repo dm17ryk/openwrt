@@ -55,8 +55,11 @@ git-src
 /tasks/
 # Generated ad-hoc root filesystem fragments
 /etc/modules.d/
+/etc/config/
+/etc/init.d/
 /lib/apk/
 /lib/modules/
+/usr/sbin/
 # Environment variables
 .env
 .env.local
