@@ -110,7 +110,7 @@ int mt7620_mii_get_bmcr(struct mt7620_gsw *gsw, int port, u16 *bmcr)
 	value = mt7620_mii_read_unlocked(gsw, gsw->ephy_base + port, MII_BMCR);
 	mutex_unlock(&gsw->mdio_lock);
 
-	if (value == 0xffff)
+	if (mt7620_mii_read_failed(value))
 		return -EIO;
 
 	*bmcr = value;
@@ -127,7 +127,7 @@ int mt7620_mii_set_bmcr(struct mt7620_gsw *gsw, int port, bool enable)
 
 	mutex_lock(&gsw->mdio_lock);
 	value = mt7620_mii_read_unlocked(gsw, gsw->ephy_base + port, MII_BMCR);
-	if (value == 0xffff) {
+	if (mt7620_mii_read_failed(value)) {
 		ret = -EIO;
 		goto out;
 	}

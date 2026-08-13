@@ -37,10 +37,18 @@ static void test_idempotence(void)
 	assert(mt7620_bmcr_set_enable(up, true) == up);
 }
 
+static void test_mdio_read_errors(void)
+{
+	assert(mt7620_mii_read_failed((uint32_t)-1));
+	assert(mt7620_mii_read_failed(0xffff));
+	assert(!mt7620_mii_read_failed(0x1140));
+}
+
 int main(void)
 {
 	test_disable_preserves_bits();
 	test_enable_restarts_autonegotiation();
 	test_idempotence();
+	test_mdio_read_errors();
 	return 0;
 }

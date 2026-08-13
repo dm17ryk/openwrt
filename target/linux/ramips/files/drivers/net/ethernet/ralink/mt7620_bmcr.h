@@ -11,10 +11,16 @@
 #include <stdint.h>
 
 #define u16 uint16_t
+#define u32 uint32_t
 #define BMCR_ANENABLE 0x1000
 #define BMCR_ANRESTART 0x0200
 #define BMCR_PDOWN 0x0800
 #endif
+
+static inline bool mt7620_mii_read_failed(u32 value)
+{
+	return (int)value < 0 || value == 0xffff;
+}
 
 static inline u16 mt7620_bmcr_set_enable(u16 bmcr, bool enable)
 {

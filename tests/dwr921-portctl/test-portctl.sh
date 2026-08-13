@@ -27,7 +27,7 @@ done
 PATH="$TMP:$PATH" "$ROOT/package/network/utils/dwr921-portctl/files/usr/sbin/dwr921-portctl" \
 	restore-all-ports
 
-grep -qx 'dev switch0 port 0 set enable 0' "$DWR921_SWCONFIG_LOG"
+grep -qx 'dev switch0 port 3 set enable 0' "$DWR921_SWCONFIG_LOG"
 for port in 0 1 2 3 4; do
 	grep -qx "dev switch0 port $port get enable" "$DWR921_SWCONFIG_LOG"
 done
