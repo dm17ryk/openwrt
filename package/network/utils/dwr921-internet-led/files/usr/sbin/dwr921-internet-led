@@ -5,6 +5,7 @@ LED_SYSFS_ROOT="${DWR921_LED_SYSFS_ROOT:-/sys/class/leds}"
 LED_SYSFS="${DWR921_INTERNET_LED_SYSFS:-$LED_SYSFS_ROOT/$LED_NAME}"
 WIFI_SYSFS="${DWR921_WIFI_SYSFS:-/sys/class/net}"
 QMI_STATE_FILE="${DWR921_QMI_STATE_FILE:-/tmp/run/dwr921-qmi-state}"
+QMI_DEVICE="${DWR921_QMI_DEVICE:-/dev/cdc-wdm0}"
 TEST_MODE="${DWR921_INTERNET_LED_TEST:-0}"
 
 enabled=1
@@ -12,10 +13,12 @@ probe_host=1.1.1.1
 interfaces="wwan0 eth0.2"
 interval=30
 timeout=2
+qmi_refresh=1
 
 if [ "$TEST_MODE" = 1 ]; then
 	probe_host="${DWR921_INTERNET_LED_PROBE_HOST:-$probe_host}"
 	interfaces="${DWR921_INTERNET_LED_INTERFACES:-$interfaces}"
+	qmi_refresh="${DWR921_QMI_REFRESH:-0}"
 else
 	[ "$(cat /tmp/sysinfo/board_name 2>/dev/null)" = \
 		dlink,dwr-921-c3-uboot ] || exit 0
@@ -64,6 +67,48 @@ set_leds_off() {
 	set_led green:4g 0
 	set_led green:sigstrength 0
 	set_led red:sigstrength 0
+}
+
+refresh_qmi_state() {
+	local serving_system signal_info registration radio rssi state_tmp
+
+	[ "$qmi_refresh" = 1 ] || return 0
+	[ -e "$QMI_DEVICE" ] || return 0
+	command -v uqmi >/dev/null 2>&1 || return 0
+	command -v jsonfilter >/dev/null 2>&1 || return 0
+
+	serving_system="$(uqmi -s -d "$QMI_DEVICE" -t 2000 \
+		--get-serving-system 2>/dev/null || true)"
+	signal_info="$(uqmi -s -d "$QMI_DEVICE" -t 2000 \
+		--get-signal-info 2>/dev/null || true)"
+	registration="$(printf '%s\n' "$serving_system" |
+		jsonfilter -e '@.registration' 2>/dev/null || true)"
+	radio="$(printf '%s\n' "$serving_system" |
+		jsonfilter -e '@.radio_interface[0]' 2>/dev/null || true)"
+	rssi="$(printf '%s\n' "$signal_info" |
+		jsonfilter -e '@.rssi' 2>/dev/null || true)"
+
+	case "$registration" in
+		registered|searching|not_registered|registration_denied|unknown) ;;
+		*) registration=unknown ;;
+	esac
+	case "$radio" in
+		lte|umts|wcdma|gsm|edge|gprs|unknown) ;;
+		*) radio=unknown ;;
+	esac
+	case "$rssi" in
+		-[0-9]|-[0-9][0-9]|-[0-9][0-9][0-9]) ;;
+		*) rssi= ;;
+	esac
+
+	state_tmp="$QMI_STATE_FILE.tmp.$$"
+	mkdir -p "${QMI_STATE_FILE%/*}"
+	(
+		umask 077
+		printf 'registration=%s\nradio=%s\nrssi=%s\n' \
+			"$registration" "$radio" "$rssi" > "$state_tmp"
+		mv "$state_tmp" "$QMI_STATE_FILE"
+	)
 }
 
 wifi_is_up() {
@@ -154,6 +199,7 @@ probe_once() {
 
 set_leds_off
 update_wifi_led
+refresh_qmi_state
 update_qmi_leds
 probe_once || true
 [ "${DWR921_INTERNET_LED_ONCE:-0}" = 1 ] && exit 0
@@ -161,6 +207,7 @@ probe_once || true
 while :; do
 	sleep "$interval"
 	update_wifi_led
+	refresh_qmi_state
 	update_qmi_leds
 	probe_once || true
 done

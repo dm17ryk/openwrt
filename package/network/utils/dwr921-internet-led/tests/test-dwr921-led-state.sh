@@ -58,4 +58,48 @@ PATH="$tmpdir/bin:$PATH" "$script"
 [ "$(cat "$tmpdir/sys/class/leds/green:sigstrength/brightness")" = 0 ]
 [ "$(cat "$tmpdir/sys/class/leds/red:sigstrength/brightness")" = 1 ]
 
+cat > "$tmpdir/bin/uqmi" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$DWR921_TEST_UQMI_LOG"
+case "$*" in
+	*--get-serving-system*)
+		printf '{"registration":"registered","radio_interface":["lte"]}\n'
+		;;
+	*--get-signal-info*) printf '{"rssi":-72}\n' ;;
+	*) exit 1 ;;
+esac
+EOF
+cat > "$tmpdir/bin/jsonfilter" <<'EOF'
+#!/bin/sh
+cat >/dev/null
+case "$*" in
+	*registration*) printf 'registered\n' ;;
+	*radio_interface*) printf 'lte\n' ;;
+	*rssi*) printf '%s\n' -72 ;;
+	*) exit 1 ;;
+esac
+EOF
+chmod 755 "$tmpdir/bin/uqmi" "$tmpdir/bin/jsonfilter"
+
+rm -f "$tmpdir/qmi-state"
+: > "$tmpdir/cdc-wdm0"
+: > "$tmpdir/uqmi.log"
+DWR921_INTERNET_LED_TEST=1 \
+DWR921_INTERNET_LED_ONCE=1 \
+DWR921_QMI_REFRESH=1 \
+DWR921_QMI_DEVICE="$tmpdir/cdc-wdm0" \
+DWR921_LED_SYSFS_ROOT="$tmpdir/sys/class/leds" \
+DWR921_QMI_STATE_FILE="$tmpdir/qmi-state" \
+DWR921_WIFI_SYSFS="$tmpdir/sys/class/net" \
+DWR921_TEST_UQMI_LOG="$tmpdir/uqmi.log" \
+PATH="$tmpdir/bin:$PATH" "$script"
+
+grep -qx 'registration=registered' "$tmpdir/qmi-state"
+grep -qx 'radio=lte' "$tmpdir/qmi-state"
+grep -qx -- 'rssi=-72' "$tmpdir/qmi-state"
+grep -q -- '--get-serving-system' "$tmpdir/uqmi.log"
+grep -q -- '--get-signal-info' "$tmpdir/uqmi.log"
+[ "$(cat "$tmpdir/sys/class/leds/green:4g/brightness")" = 1 ]
+[ "$(cat "$tmpdir/sys/class/leds/green:sigstrength/brightness")" = 1 ]
+
 echo "dwr921 LED state: PASS"

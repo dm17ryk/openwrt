@@ -8,7 +8,7 @@ Usage: dwr921-at-probe [tty-device ...]
 
 Probe one modem AT port at a time with bounded, read-only commands.
 Default devices: /dev/ttyUSB0 through /dev/ttyUSB3
-Exit an interactive microcom session with Ctrl-X.
+Exit an interactive picocom session with Ctrl-A, then Ctrl-X.
 EOF
 }
 
@@ -25,10 +25,8 @@ case "${1:-}" in
 		;;
 esac
 
-if ! command -v microcom >/dev/null 2>&1 || \
-	! command -v stty >/dev/null 2>&1 || \
-	! command -v timeout >/dev/null 2>&1; then
-	echo "dwr921-at-probe: microcom, stty, and timeout are required" >&2
+if ! command -v picocom >/dev/null 2>&1; then
+	echo "dwr921-at-probe: picocom is required" >&2
 	exit 1
 fi
 
@@ -48,21 +46,25 @@ for device in $devices; do
 		continue
 	fi
 
-	# The BM806C option driver rejects baud-rate ioctls, but accepts the
-	# termios mode flags. USB modem serial links do not use a physical UART
-	# baud clock, so configure the accepted raw/no-echo mode and let microcom
-	# perform its own bounded open.
-	if stty -F "$device" raw -echo 2>&1; then
-		echo "stty=raw-no-echo (baud ioctl unsupported by USB modem driver)"
-	else
-		echo "stty=configuration-failed"
-	fi
-
 	printf '%s\n' 'commands=AT,ATI,AT+CGMI,AT+CGMM,AT+CGMR,AT+CPIN?,AT+CFUN?,AT+CSQ,AT+COPS?'
 	{
 		printf 'AT\rATI\rAT+CGMI\rAT+CGMM\rAT+CGMR\rAT+CPIN?\rAT+CFUN?\rAT+CSQ\rAT+COPS?\r'
-		sleep 2
-	} | timeout -k 1 8 microcom -s 115200 -t 3000 "$device" >"$tmp_output" 2>&1
+		# Picocom exits after three idle seconds. The explicit escape sequence
+		# also enforces an eight-second wall-clock limit if unsolicited modem
+		# output keeps resetting its idle timer.
+		sleep 8
+		printf '\001\030'
+	} | picocom \
+		--baud 115200 \
+		--flow n \
+		--parity n \
+		--databits 8 \
+		--stopbits 1 \
+		--exit-after 3000 \
+		--noreset \
+		--nolock \
+		--quiet \
+		"$device" >"$tmp_output" 2>&1
 	result=$?
 	sanitize <"$tmp_output"
 	if grep -Eiq '(^|[^[:alpha:]])(OK|ERROR|READY|BroadMobi|BM806C)([^[:alpha:]]|$)' "$tmp_output"; then
@@ -70,5 +72,5 @@ for device in $devices; do
 	else
 		echo "response=silent-or-unrecognized"
 	fi
-	echo "microcom_timeout_or_exit=$result"
+	echo "picocom_exit=$result"
 done

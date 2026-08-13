@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=dwr921-internet-led
-PKG_RELEASE:=3
+PKG_RELEASE:=4
 PKG_FLAGS:=nonshared
 
 include $(INCLUDE_DIR)/package.mk
@@ -10,7 +10,7 @@ define Package/dwr921-internet-led
   SECTION:=net
   CATEGORY:=Network
   SUBMENU:=WWAN
-  DEPENDS:=+busybox
+  DEPENDS:=+busybox +jsonfilter +uqmi
   TITLE:=DWR-921 Internet reachability LED
 endef
 

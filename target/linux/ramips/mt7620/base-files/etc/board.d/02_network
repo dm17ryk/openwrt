@@ -299,6 +299,7 @@ ramips_setup_interfaces()
 	dlink,dwr-921-c3-uboot)
 		ucidef_set_interface "lte" device "/dev/cdc-wdm0" protocol "qmi" \
 			apn "uinternet" auth "none" pdptype "ipv4" metric "20"
+		uci add_list firewall.@zone[1].network='lte'
 		;;
 	esac
 }
