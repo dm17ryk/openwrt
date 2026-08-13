@@ -281,6 +281,7 @@ static int mt7620_gsw_probe(struct platform_device *pdev)
 		return PTR_ERR(gsw->base);
 
 	gsw->dev = &pdev->dev;
+	mutex_init(&gsw->mdio_lock);
 
 	gsw->irq = platform_get_irq(pdev, 0);
 

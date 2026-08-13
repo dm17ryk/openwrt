@@ -1,0 +1,76 @@
+#!/bin/sh
+
+set -u
+
+usage() {
+	cat <<'EOF'
+Usage: dwr921-at-probe [tty-device ...]
+
+Probe one modem AT port at a time with bounded, read-only commands.
+Default devices: /dev/ttyUSB0 through /dev/ttyUSB3
+Exit an interactive picocom session with Ctrl-A, then Ctrl-X.
+EOF
+}
+
+sanitize() {
+	sed -E \
+		-e 's/(IMEI|IMSI|ICCID|MSISDN|SERIAL|PHONE)([^[:alnum:]]*)[^[:space:]]+/\1\2[REDACTED]/g' \
+		-e 's/[0-9]{10,20}/[REDACTED]/g'
+}
+
+case "${1:-}" in
+	-h|--help)
+		usage
+		exit 0
+		;;
+esac
+
+if ! command -v picocom >/dev/null 2>&1; then
+	echo "dwr921-at-probe: picocom is required" >&2
+	exit 1
+fi
+
+if [ "$#" -gt 0 ]; then
+	devices="$*"
+else
+	devices="/dev/ttyUSB0 /dev/ttyUSB1 /dev/ttyUSB2 /dev/ttyUSB3"
+fi
+
+tmp_output="/tmp/dwr921-at-probe.$$"
+trap 'rm -f "$tmp_output"' EXIT INT TERM
+
+for device in $devices; do
+	echo "=== $device ==="
+	if [ ! -c "$device" ]; then
+		echo "status=missing"
+		continue
+	fi
+
+	printf '%s\n' 'commands=AT,ATI,AT+CGMI,AT+CGMM,AT+CGMR,AT+CPIN?,AT+CFUN?,AT+CSQ,AT+COPS?'
+	{
+		printf 'AT\rATI\rAT+CGMI\rAT+CGMM\rAT+CGMR\rAT+CPIN?\rAT+CFUN?\rAT+CSQ\rAT+COPS?\r'
+		# Picocom exits after three idle seconds. The explicit escape sequence
+		# also enforces an eight-second wall-clock limit if unsolicited modem
+		# output keeps resetting its idle timer.
+		sleep 8
+		printf '\001\030'
+	} | picocom \
+		--baud 115200 \
+		--flow n \
+		--parity n \
+		--databits 8 \
+		--stopbits 1 \
+		--exit-after 3000 \
+		--noreset \
+		--nolock \
+		--quiet \
+		"$device" >"$tmp_output" 2>&1
+	result=$?
+	sanitize <"$tmp_output"
+	if grep -Eiq '(^|[^[:alpha:]])(OK|ERROR|READY|BroadMobi|BM806C)([^[:alpha:]]|$)' "$tmp_output"; then
+		echo "response=present"
+	else
+		echo "response=silent-or-unrecognized"
+	fi
+	echo "picocom_exit=$result"
+done

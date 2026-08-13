@@ -1,0 +1,213 @@
+#!/bin/sh
+
+LED_NAME=green:internet
+LED_SYSFS_ROOT="${DWR921_LED_SYSFS_ROOT:-/sys/class/leds}"
+LED_SYSFS="${DWR921_INTERNET_LED_SYSFS:-$LED_SYSFS_ROOT/$LED_NAME}"
+WIFI_SYSFS="${DWR921_WIFI_SYSFS:-/sys/class/net}"
+QMI_STATE_FILE="${DWR921_QMI_STATE_FILE:-/tmp/run/dwr921-qmi-state}"
+QMI_DEVICE="${DWR921_QMI_DEVICE:-/dev/cdc-wdm0}"
+TEST_MODE="${DWR921_INTERNET_LED_TEST:-0}"
+
+enabled=1
+probe_host=1.1.1.1
+interfaces="wwan0 eth0.2"
+interval=30
+timeout=2
+qmi_refresh=1
+
+if [ "$TEST_MODE" = 1 ]; then
+	probe_host="${DWR921_INTERNET_LED_PROBE_HOST:-$probe_host}"
+	interfaces="${DWR921_INTERNET_LED_INTERFACES:-$interfaces}"
+	qmi_refresh="${DWR921_QMI_REFRESH:-0}"
+else
+	[ "$(cat /tmp/sysinfo/board_name 2>/dev/null)" = \
+		dlink,dwr-921-c3-uboot ] || exit 0
+	. /lib/functions.sh
+	config_load dwr921-internet-led
+	config_get_bool enabled main enabled 1
+	config_get probe_host main probe_host "$probe_host"
+	config_get interfaces main interfaces "$interfaces"
+	config_get interval main interval "$interval"
+	config_get timeout main timeout "$timeout"
+fi
+
+[ "$enabled" = 1 ] || exit 0
+[ -d "$LED_SYSFS_ROOT" ] || exit 1
+command -v ping >/dev/null 2>&1 || exit 1
+command -v ip >/dev/null 2>&1 || exit 1
+
+case "$interval" in
+	*[!0-9]*|'') exit 1 ;;
+esac
+[ "$interval" -ge 1 ] && [ "$interval" -le 3600 ] || exit 1
+
+case "$timeout" in
+	*[!0-9]*|'') exit 1 ;;
+esac
+[ "$timeout" -ge 1 ] && [ "$timeout" -le 10 ] || exit 1
+
+case "$probe_host" in
+	*[!0-9.]*|'') exit 1 ;;
+esac
+
+set_led() {
+	local name="$1"
+	local value="$2"
+	local led="$LED_SYSFS_ROOT/$name"
+
+	[ -d "$led" ] || return 0
+	echo none > "$led/trigger" 2>/dev/null || true
+	echo "$value" > "$led/brightness" 2>/dev/null || true
+}
+
+set_leds_off() {
+	set_led green:internet 0
+	set_led green:wifi 0
+	set_led green:3g 0
+	set_led green:4g 0
+	set_led green:sigstrength 0
+	set_led red:sigstrength 0
+}
+
+refresh_qmi_state() {
+	local serving_system signal_info registration radio rssi state_tmp
+
+	[ "$qmi_refresh" = 1 ] || return 0
+	[ -e "$QMI_DEVICE" ] || return 0
+	command -v uqmi >/dev/null 2>&1 || return 0
+	command -v jsonfilter >/dev/null 2>&1 || return 0
+
+	serving_system="$(uqmi -s -d "$QMI_DEVICE" -t 2000 \
+		--get-serving-system 2>/dev/null || true)"
+	signal_info="$(uqmi -s -d "$QMI_DEVICE" -t 2000 \
+		--get-signal-info 2>/dev/null || true)"
+	registration="$(printf '%s\n' "$serving_system" |
+		jsonfilter -e '@.registration' 2>/dev/null || true)"
+	radio="$(printf '%s\n' "$serving_system" |
+		jsonfilter -e '@.radio_interface[0]' 2>/dev/null || true)"
+	rssi="$(printf '%s\n' "$signal_info" |
+		jsonfilter -e '@.rssi' 2>/dev/null || true)"
+
+	case "$registration" in
+		registered|searching|not_registered|registration_denied|unknown) ;;
+		*) registration=unknown ;;
+	esac
+	case "$radio" in
+		lte|umts|wcdma|gsm|edge|gprs|unknown) ;;
+		*) radio=unknown ;;
+	esac
+	case "$rssi" in
+		-[0-9]|-[0-9][0-9]|-[0-9][0-9][0-9]) ;;
+		*) rssi= ;;
+	esac
+
+	state_tmp="$QMI_STATE_FILE.tmp.$$"
+	mkdir -p "${QMI_STATE_FILE%/*}"
+	(
+		umask 077
+		printf 'registration=%s\nradio=%s\nrssi=%s\n' \
+			"$registration" "$radio" "$rssi" > "$state_tmp"
+		mv "$state_tmp" "$QMI_STATE_FILE"
+	)
+}
+
+wifi_is_up() {
+	local device state
+
+	for device in "$WIFI_SYSFS"/phy0-ap*; do
+		[ -d "$device" ] || continue
+		state="$(cat "$device/operstate" 2>/dev/null || true)"
+		case "$state" in
+			up|unknown) return 0 ;;
+		esac
+	done
+
+	return 1
+}
+
+update_wifi_led() {
+	if wifi_is_up; then
+		set_led green:wifi 1
+	else
+		set_led green:wifi 0
+	fi
+}
+
+update_qmi_leds() {
+	local key value registration radio rssi
+
+	registration=""
+	radio=""
+	rssi=""
+	if [ -r "$QMI_STATE_FILE" ]; then
+		while IFS='=' read -r key value; do
+			case "$key" in
+				registration) registration="$value" ;;
+				radio) radio="$value" ;;
+				rssi) rssi="$value" ;;
+			esac
+		done < "$QMI_STATE_FILE"
+	fi
+
+	set_led green:3g 0
+	set_led green:4g 0
+	set_led green:sigstrength 0
+	set_led red:sigstrength 0
+
+	[ "$registration" = registered ] || return 0
+
+	case "$radio" in
+		lte|lte-*|4g|4g-*) set_led green:4g 1 ;;
+		umts|wcdma|gsm|edge|gprs|3g|3g-*) set_led green:3g 1 ;;
+	esac
+
+	case "$rssi" in
+		-[0-9]*)
+			if [ "$rssi" -ge -85 ]; then
+				set_led green:sigstrength 1
+			elif [ "$rssi" -ge -110 ]; then
+				set_led red:sigstrength 1
+			fi
+			;;
+	esac
+}
+
+route_device() {
+	ip -4 route get "$probe_host" 2>/dev/null |
+		awk '{ for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit } }'
+}
+
+probe_once() {
+	local device allowed candidate
+
+	device="$(route_device)"
+	allowed=0
+	for candidate in $interfaces; do
+		[ "$candidate" = "$device" ] && allowed=1
+	done
+
+	if [ "$allowed" = 1 ] && [ -n "$device" ] && \
+		ping -c 1 -W "$timeout" -I "$device" "$probe_host" \
+		>/dev/null 2>&1; then
+		set_led green:internet 1
+		return 0
+	fi
+
+	set_led green:internet 0
+	return 1
+}
+
+set_leds_off
+update_wifi_led
+refresh_qmi_state
+update_qmi_leds
+probe_once || true
+[ "${DWR921_INTERNET_LED_ONCE:-0}" = 1 ] && exit 0
+
+while :; do
+	sleep "$interval"
+	update_wifi_led
+	refresh_qmi_state
+	update_qmi_leds
+	probe_once || true
+done

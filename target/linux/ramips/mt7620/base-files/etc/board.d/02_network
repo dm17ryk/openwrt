@@ -34,6 +34,10 @@ ramips_setup_interfaces()
 		ucidef_add_switch "switch0" \
 			"0:lan" "1:lan" "2:lan" "3:lan" "4:wan" "6@eth0"
 		;;
+	dlink,dwr-921-c3-uboot)
+		ucidef_add_switch "switch0" \
+			"0:lan:4" "1:lan:3" "2:lan:2" "3:lan:1" "4:wan" "6@eth0"
+		;;
 	alfa-network,r36m-e4g|\
 	bolt,bl100|\
 	zbtlink,zbt-we1026-h-32m)
@@ -290,6 +294,14 @@ ramips_setup_interfaces()
 			"0:lan" "1:lan" "2:lan" "3:lan" "4:wan" "7t@eth0"
 		;;
 	esac
+
+	case $board in
+	dlink,dwr-921-c3-uboot)
+		ucidef_set_interface "lte" device "/dev/cdc-wdm0" protocol "qmi" \
+			apn "uinternet" auth "none" pdptype "ipv4" metric "20"
+		uci add_list firewall.@zone[1].network='lte'
+		;;
+	esac
 }
 
 ramips_setup_macs()
@@ -358,6 +370,12 @@ ramips_setup_macs()
 	lava,lr-25g001)
 		wan_mac=$(jboot_config_read -m -i $(find_mtd_part "config") -o 0xE000)
 		lan_mac=$(macaddr_add "$wan_mac" 1)
+		label_mac=$wan_mac
+		;;
+	dlink,dwr-921-c3-uboot)
+		base_mac=$(mtd_get_mac_binary factory 0x4)
+		lan_mac=$(macaddr_add "$base_mac" -1)
+		wan_mac=$(macaddr_add "$base_mac" -2)
 		label_mac=$wan_mac
 		;;
 	dovado,tiny-ac)

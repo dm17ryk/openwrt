@@ -84,8 +84,8 @@ static int mt7620_gsw_config(struct fe_priv *priv)
 
 	/* is the mt7530 internal or external */
 	if (priv->mii_bus && mdiobus_get_phy(priv->mii_bus, 0x1f)) {
-		mt7530_probe(priv->dev, gsw->base, NULL, 0);
-		mt7530_probe(priv->dev, NULL, priv->mii_bus, 1);
+		mt7530_probe(priv->dev, gsw->base, NULL, gsw, 0);
+		mt7530_probe(priv->dev, NULL, priv->mii_bus, NULL, 1);
 
 		/* magic values from original SDK */
 		val = mt7530_mdio_r32(gsw, 0x7830);
@@ -101,7 +101,7 @@ static int mt7620_gsw_config(struct fe_priv *priv)
 
 		pr_info("mt7530: mdio central align\n");
 	} else {
-		mt7530_probe(priv->dev, gsw->base, NULL, 1);
+		mt7530_probe(priv->dev, gsw->base, NULL, gsw, 1);
 	}
 
 	return 0;

@@ -1,0 +1,41 @@
+#!/bin/sh /etc/rc.common
+
+START=97
+USE_PROCD=1
+
+PROG=/usr/sbin/dwr921-internet-led
+LED_ROOT="${DWR921_LED_SYSFS_ROOT:-/sys/class/leds}"
+
+clear_managed_leds() {
+	for led in green:internet green:wifi green:3g green:4g \
+		green:sigstrength red:sigstrength; do
+		echo none > "$LED_ROOT/$led/trigger" 2>/dev/null || true
+		echo 0 > "$LED_ROOT/$led/brightness" 2>/dev/null || true
+	done
+}
+
+start_service() {
+	. /lib/functions.sh
+	[ "$(cat /tmp/sysinfo/board_name 2>/dev/null)" = \
+		dlink,dwr-921-c3-uboot ] || return 0
+
+	config_load dwr921-internet-led
+	config_get_bool enabled main enabled 1
+	[ "$enabled" = 1 ] || {
+		clear_managed_leds
+		return 0
+	}
+
+	procd_open_instance
+	procd_set_param command "$PROG"
+	procd_set_param respawn 3600 10 3
+	procd_close_instance
+}
+
+stop_service() {
+	clear_managed_leds
+}
+
+service_triggers() {
+	procd_add_reload_trigger dwr921-internet-led
+}

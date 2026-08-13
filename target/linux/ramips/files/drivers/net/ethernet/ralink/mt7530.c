@@ -25,6 +25,7 @@
 #include <net/genetlink.h>
 #include <linux/switch.h>
 #include <linux/delay.h>
+#include <linux/mii.h>
 #include <linux/phy.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
@@ -34,6 +35,8 @@
 #include <asm/byteorder.h>
 
 #include "mt7530.h"
+#include "gsw_mt7620.h"
+#include "mt7620_bmcr.h"
 
 #define MT7530_CPU_PORT		6
 #define MT7530_NUM_PORTS	8
@@ -175,6 +178,7 @@ struct mt7530_vlan_entry {
 struct mt7530_priv {
 	void __iomem		*base;
 	struct mii_bus		*bus;
+	struct mt7620_gsw	*gsw;
 	struct switch_dev	swdev;
 
 	u8			mirror_dest_port;
@@ -549,6 +553,82 @@ mt7530_set_port_mirror_tx(struct switch_dev *dev, const struct switch_attr *attr
 	priv->port_entries[val->port_vlan].mirror_tx = val->value.i;
 
 	return 0;
+}
+
+static int
+mt7530_get_port_bmcr(struct mt7530_priv *priv, int port, u16 *bmcr)
+{
+	int ret;
+
+	if (priv->gsw)
+		return mt7620_mii_get_bmcr(priv->gsw, port, bmcr);
+	if (!priv->bus)
+		return -EOPNOTSUPP;
+
+	mutex_lock(&priv->bus->mdio_lock);
+	ret = __mdiobus_read(priv->bus, port, MII_BMCR);
+	mutex_unlock(&priv->bus->mdio_lock);
+	if (ret < 0)
+		return ret;
+
+	*bmcr = ret;
+	return 0;
+}
+
+static int
+mt7530_set_port_bmcr(struct mt7530_priv *priv, int port, bool enable)
+{
+	u16 bmcr;
+	int ret;
+
+	if (priv->gsw)
+		return mt7620_mii_set_bmcr(priv->gsw, port, enable);
+	if (!priv->bus)
+		return -EOPNOTSUPP;
+
+	mutex_lock(&priv->bus->mdio_lock);
+	ret = __mdiobus_read(priv->bus, port, MII_BMCR);
+	if (ret < 0)
+		goto out;
+
+	bmcr = mt7620_bmcr_set_enable(ret, enable);
+	ret = __mdiobus_write(priv->bus, port, MII_BMCR, bmcr);
+out:
+	mutex_unlock(&priv->bus->mdio_lock);
+	return ret;
+}
+
+static int
+mt7530_get_port_enable(struct switch_dev *dev, const struct switch_attr *attr,
+		       struct switch_val *val)
+{
+	struct mt7530_priv *priv = container_of(dev, struct mt7530_priv, swdev);
+	u16 bmcr;
+	int ret;
+
+	if (val->port_vlan < 0 || val->port_vlan > 4)
+		return -EINVAL;
+
+	ret = mt7530_get_port_bmcr(priv, val->port_vlan, &bmcr);
+	if (ret)
+		return ret;
+
+	val->value.i = !(bmcr & BMCR_PDOWN);
+	return 0;
+}
+
+static int
+mt7530_set_port_enable(struct switch_dev *dev, const struct switch_attr *attr,
+		       struct switch_val *val)
+{
+	struct mt7530_priv *priv = container_of(dev, struct mt7530_priv, swdev);
+
+	if (val->port_vlan < 0 || val->port_vlan > 4)
+		return -EINVAL;
+	if (val->value.i != 0 && val->value.i != 1)
+		return -EINVAL;
+
+	return mt7530_set_port_bmcr(priv, val->port_vlan, val->value.i);
 }
 
 static void
@@ -967,6 +1047,13 @@ static const struct switch_attr mt7530_port[] = {
 		.set = mt7530_set_port_mirror_tx,
 		.get = mt7530_get_port_mirror_tx,
 		.max = 1,
+	}, {
+		.type = SWITCH_TYPE_INT,
+		.name = "enable",
+		.description = "Enable the external PHY",
+		.set = mt7530_set_port_enable,
+		.get = mt7530_get_port_enable,
+		.max = 1,
 	},
 };
 
@@ -1005,7 +1092,8 @@ static const struct switch_dev_ops mt7530_ops = {
 };
 
 int
-mt7530_probe(struct device *dev, void __iomem *base, struct mii_bus *bus, int vlan)
+mt7530_probe(struct device *dev, void __iomem *base, struct mii_bus *bus,
+	     struct mt7620_gsw *gsw, int vlan)
 {
 	struct switch_dev *swdev;
 	struct mt7530_priv *mt7530;
@@ -1019,6 +1107,7 @@ mt7530_probe(struct device *dev, void __iomem *base, struct mii_bus *bus, int vl
 
 	mt7530->base = base;
 	mt7530->bus = bus;
+	mt7530->gsw = gsw;
 	mt7530->global_vlan_enable = vlan;
 
 	swdev = &mt7530->swdev;

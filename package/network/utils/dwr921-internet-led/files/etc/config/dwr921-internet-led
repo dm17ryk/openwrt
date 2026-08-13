@@ -1,0 +1,6 @@
+config internet_led 'main'
+	option enabled '1'
+	option probe_host '1.1.1.1'
+	option interfaces 'wwan0 eth0.2'
+	option interval '30'
+	option timeout '2'

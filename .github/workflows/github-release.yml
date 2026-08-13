@@ -1,24 +1,64 @@
-name: Create GitHub release
-
-permissions:
-  contents: write
+name: Build and release DWR-921 C3 U-Boot firmware
 
 on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dwr-921-c3-uboot-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  build:
+    name: Build release firmware
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/build-dwr-921-c3-uboot.yml
+
   release:
+    name: Publish GitHub release
+    needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Release
-        uses: softprops/action-gh-release@v3
+      - name: Download firmware artifact
+        uses: actions/download-artifact@v7
         with:
-          draft: true
-          prerelease: true
+          name: dwr-921-c3-uboot-firmware
+          path: release
+
+      - name: Verify release files
+        working-directory: release
+        run: |
+          test -s sha256sums
+          sha256sum --check sha256sums
+          compgen -G '*.bin' > /dev/null
+
+      - name: Create release and upload firmware
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          mapfile -d '' assets < <(
+            find release -maxdepth 1 -type f -print0 | LC_ALL=C sort -z
+          )
+          test "${#assets[@]}" -gt 0
+
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+              --verify-tag \
+              --generate-notes \
+              --title "OpenWrt DWR-921 C3 (U-Boot) $GITHUB_REF_NAME"
+          fi
