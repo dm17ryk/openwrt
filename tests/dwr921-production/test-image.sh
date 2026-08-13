@@ -17,16 +17,15 @@ MANIFEST=$TARGET_DIR/$PREFIX.manifest
 [ -s "$MANIFEST" ]
 
 MKIMAGE=${MKIMAGE:-$PWD/staging_dir/host/bin/mkimage}
-DUMPIMAGE=${DUMPIMAGE:-$(command -v dumpimage || true)}
 FWTOOL=${FWTOOL:-$PWD/staging_dir/host/bin/fwtool}
+UNSQUASHFS=${UNSQUASHFS:-$PWD/staging_dir/host/bin/unsquashfs4}
 
 command -v dd >/dev/null
 command -v od >/dev/null
 command -v stat >/dev/null
-command -v unsquashfs >/dev/null
 [ -x "$MKIMAGE" ]
-[ -x "$DUMPIMAGE" ]
 [ -x "$FWTOOL" ]
+[ -x "$UNSQUASHFS" ]
 
 required_packages='
 tc-full
@@ -66,11 +65,10 @@ for suffix in initramfs-kernel.bin squashfs-factory.bin squashfs-sysupgrade.bin;
 	info=$($MKIMAGE -l "$image")
 	echo "$info" | grep -Eq 'Image Type:.*MIPS Linux Kernel Image'
 	echo "$info" | grep -Eq 'Compression:.*lzma|Image Type:.*lzma compressed'
-	$DUMPIMAGE -T kernel -p 0 -o "$TMP_DIR/$suffix.payload" "$image" \
-		>/dev/null
-
 	data_size=$(printf '%s\n' "$info" | awk '/Data Size:/ { print $3; exit }')
 	[ -n "$data_size" ]
+	dd if="$image" iflag=skip_bytes,count_bytes skip=64 count="$data_size" \
+		of="$TMP_DIR/$suffix.payload" 2>/dev/null
 	[ "$(stat -c '%s' "$TMP_DIR/$suffix.payload")" -eq "$data_size" ]
 done
 
@@ -97,9 +95,9 @@ kernel_data_size=$($MKIMAGE -l "$TARGET_DIR/$PREFIX-squashfs-sysupgrade.bin" \
 rootfs_offset=$((64 + kernel_data_size))
 dd if="$TARGET_DIR/$PREFIX-squashfs-sysupgrade.bin" \
 	iflag=skip_bytes skip="$rootfs_offset" of="$rootfs_image" 2>/dev/null
-unsquashfs -s "$rootfs_image" >/dev/null
+"$UNSQUASHFS" -s "$rootfs_image" >/dev/null
 rootfs_list=$TMP_DIR/rootfs.list
-unsquashfs -lls "$rootfs_image" > "$rootfs_list"
+"$UNSQUASHFS" -lls "$rootfs_image" > "$rootfs_list"
 
 rootfs_has() {
 	grep -Eq "squashfs-root/$1( -> |$)" "$rootfs_list"
@@ -132,7 +130,8 @@ find_module nf_nat_sip
 # default wireless mode. The socat package ships a disabled example only.
 ! rootfs_has etc/rc.d/S99socat
 ! rootfs_has etc/init.d/dwr921-portctl
-unsquashfs -cat "$rootfs_image" etc/config/socat > "$TMP_DIR/socat.config"
+"$UNSQUASHFS" -cat "$rootfs_image" etc/config/socat \
+	> "$TMP_DIR/socat.config"
 grep -Eq "^[[:space:]]*option[[:space:]]+enable[[:space:]]+'0'" \
 	"$TMP_DIR/socat.config"
 
@@ -147,7 +146,7 @@ rootfs_text_matches() {
 			case "$entry" in
 				*" -> "*) continue ;;
 			esac
-			if unsquashfs -cat "$rootfs_image" "$path" 2>/dev/null \
+			if "$UNSQUASHFS" -cat "$rootfs_image" "$path" 2>/dev/null \
 				| grep -E "(^|[[:space:]])(tc[[:space:]]+qdisc|netem|ifb|ct[[:space:]]+helper|mode[[:space:]]+'monitor')" \
 				>/dev/null 2>&1; then
 				return 0
