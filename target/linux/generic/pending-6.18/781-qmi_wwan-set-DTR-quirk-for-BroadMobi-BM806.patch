@@ -1,0 +1,38 @@
+From: AgentK <dmitryk@3vium.com>
+Date: Sat, 15 Aug 2026 04:55:00 +0300
+Subject: [PATCH] net: usb: qmi_wwan: mark the DTR quirk for BroadMobi BM806
+
+Make the DTR requirement explicit for the BroadMobi BM806U/BM806C
+(2020:2033) fitted to the D-Link DWR-921 rev C3, matching its BM818
+sibling (2020:2060) directly below.
+
+This is a documentation change, not a fix. The part reports bcdUSB 2.01,
+so qmi_wwan_bind() already takes the DTR path through its
+
+	dev->driver_info->data & QMI_WWAN_QUIRK_DTR ||
+	le16_to_cpu(dev->udev->descriptor.bcdUSB) >= 0x0201
+
+condition regardless of the table entry, and behaviour on this device is
+identical with and without this patch -- verified on hardware, with no USB
+errors either way. It only changes anything for a BM806 variant that
+reports an older bcdUSB.
+
+In particular this does NOT fix the dead-downlink failure seen on the
+DWR-921 C3. DTR was already being asserted throughout that failure. The
+actual cause was the packet data session being owned by the modem's own
+autoconnect rather than by a host WDS client, so the host never held a
+packet data handle; that is fixed in userspace, in the qmi proto script.
+
+Signed-off-by: AgentK <dmitryk@3vium.com>
+---
+--- a/drivers/net/usb/qmi_wwan.c
++++ b/drivers/net/usb/qmi_wwan.c
+@@ -1333,7 +1333,7 @@ static const struct usb_device_id products
+ 	{QMI_FIXED_INTF(0x2001, 0x7e35, 4)},	/* D-Link DWM-222 */
+ 	{QMI_FIXED_INTF(0x2001, 0x7e3d, 4)},	/* D-Link DWM-222 A2 */
+ 	{QMI_FIXED_INTF(0x2020, 0x2031, 4)},	/* Olicard 600 */
+-	{QMI_FIXED_INTF(0x2020, 0x2033, 4)},	/* BroadMobi BM806U */
++	{QMI_QUIRK_SET_DTR(0x2020, 0x2033, 4)},	/* BroadMobi BM806U/BM806C */
+ 	{QMI_QUIRK_SET_DTR(0x2020, 0x2060, 4)},	/* BroadMobi BM818 */
+ 	{QMI_FIXED_INTF(0x0f3d, 0x68a2, 8)},    /* Sierra Wireless MC7700 */
+ 	{QMI_FIXED_INTF(0x114f, 0x68a2, 8)},    /* Sierra Wireless MC7750 */
