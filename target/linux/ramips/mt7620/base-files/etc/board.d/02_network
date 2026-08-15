@@ -297,6 +297,9 @@ ramips_setup_interfaces()
 
 	case $board in
 	dlink,dwr-921-c3-uboot)
+		# Only device/protocol/metric survive config_generate; apn, auth and
+		# pdptype here are inert. The real defaults are applied by
+		# uci-defaults/21_dwr921_c3_uboot_lte.
 		ucidef_set_interface "lte" device "/dev/cdc-wdm0" protocol "qmi" \
 			apn "uinternet" auth "none" pdptype "ipv4" metric "20"
 		uci add_list firewall.@zone[1].network='lte'
