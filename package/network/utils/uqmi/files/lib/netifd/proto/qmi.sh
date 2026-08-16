@@ -49,6 +49,93 @@ dwr921_qmi_sync() {
 	return 1
 }
 
+# Release a modem-owned data session before setting one up ourselves.
+#
+# --set-autoconnect writes WDS 0x51 into modem NVRAM, so once enabled the modem
+# raises the PDN by itself and keeps re-raising it within milliseconds of every
+# teardown. The host's own network start request then answers "No effect", no
+# host WDS client ever owns a packet data handle, and WDA Set Data Format is
+# permanently rejected because a session always exists.
+#
+# The stock firmware does exactly this first: usbmodem_set_defaults gates on
+# 2020:2033, sends WDS 0x51 status=0 and then polls WDS 0x34 up to ten times at
+# one second intervals until it reads back disabled -- only then does it raise
+# a bearer of its own. Mirror that so the host owns the session.
+dwr921_qmi_release_autoconnect() {
+	local attempt status
+
+	dwr921_qmi_board || return 0
+
+	uqmi -s -d "$device" -t 3000 --set-autoconnect disabled > /dev/null 2>&1
+
+	for attempt in 1 2 3 4 5 6 7 8 9 10; do
+		status=$(uqmi -s -d "$device" -t 3000 --get-data-status 2>/dev/null)
+		[ "$status" = '"disconnected"' ] && return 0
+		sleep 1
+	done
+
+	echo "Modem kept its autoconnect session; the host will not own the bearer"
+	return 1
+}
+
+# Cycle the radio low_power -> online, mirroring usbmodem_restart_modem@0x4f34.
+#
+# This is the step that lets the stock firmware keep modem autoconnect enabled
+# and still obtain its own packet data handle: the cycle tears down whatever
+# session the modem raised for itself, so the network start request that
+# follows is issued against a modem with no active bearer and returns a real
+# handle instead of "No effect".
+#
+# Only ever low_power(1) then online(0), each with a read-back poll, exactly as
+# the vendor does. Never "reset": there is a single DMS 0x002E call site in the
+# whole vendor library and it cannot carry that value. Sending reset wedges this
+# modem hard -- QMI stops answering entirely and only a physical power cycle
+# recovers it.
+dwr921_qmi_restart_modem() {
+	local attempt mode
+
+	dwr921_qmi_board || return 0
+
+	for mode in low_power online; do
+		uqmi -s -d "$device" -t 3000 --set-device-operating-mode "$mode" > /dev/null 2>&1
+
+		for attempt in 1 2 3; do
+			[ "$(uqmi -s -d "$device" -t 3000 --get-device-operating-mode 2>/dev/null)" = "\"$mode\"" ] && break
+			sleep 1
+		done
+	done
+
+	return 0
+}
+
+dwr921_qmi_set_autoconnect() {
+	local attempt
+
+	for attempt in 1 2 3; do
+		uqmi -s -d "$device" -t 3000 --set-autoconnect enabled > /dev/null 2>&1 && return 0
+
+		[ "$attempt" -lt 3 ] || break
+		dwr921_qmi_sync || true
+		sleep "$attempt"
+	done
+
+	return 1
+}
+
+# True when the modem already holds a data session that it established itself
+# through autoconnect. In that state the network start request answers
+# "No effect" instead of a packet data handle, which is not a failure.
+dwr921_qmi_autoconnect_session() {
+	local cid="$1"
+
+	dwr921_qmi_board || return 1
+	[ -n "$autoconnect" ] || return 1
+	[ -n "$cid" ] || return 1
+
+	[ "$(uqmi -s -d "$device" -t 3000 --set-client-id wds,"$cid" \
+		--get-data-status 2>/dev/null)" = '"connected"' ]
+}
+
 dwr921_qmi_publish_state() {
 	local serving_system="$1"
 	local registration radio rssi state_file state_tmp
@@ -314,6 +401,7 @@ proto_qmi_setup() {
 	fi
 
 	# Cleanup current state if any
+	dwr921_qmi_release_autoconnect
 	uqmi -s -d "$device" -t 1000 --stop-network 0xffffffff --autoconnect > /dev/null 2>&1
 	uqmi -s -d "$device" -t 1000 --set-ip-family ipv6 --stop-network 0xffffffff --autoconnect > /dev/null 2>&1
 
@@ -321,6 +409,10 @@ proto_qmi_setup() {
 	uqmi -s -d "$device" -t 1000 --set-device-operating-mode online > /dev/null 2>&1
 
 	# Set IP format. This uqmi build exposes the WDA action only.
+	#
+	# 802.3 is correct for the BM806C: the stock firmware runs it in plain
+	# Ethernet mode (its qmi_wwan RawIP fixups are gated on idVendor 0x2c7c,
+	# so they never fire for 0x2020) and never issues any WDA message at all.
 	uqmi -s -d "$device" -t 1000 --wda-set-data-format 802.3 > /dev/null 2>&1
 	json_load "$(uqmi -s -d "$device" -t 1000 --wda-get-data-format)"
 	json_get_var dataformat link-layer-protocol
@@ -334,6 +426,23 @@ proto_qmi_setup() {
 
 		echo "Device does not support 802.3 mode. Informing driver of raw-ip only for $ifname .."
 		echo "Y" > /sys/class/net/$ifname/qmi/raw_ip
+	elif [ "$dataformat" = "802.3" ] &&
+	     [ -f /sys/class/net/$ifname/qmi/raw_ip ] &&
+	     [ "$(cat /sys/class/net/$ifname/qmi/raw_ip)" = "Y" ]; then
+		# Put the driver back in sync when the modem is framing 802.3.
+		# Only an explicit 802.3 answer counts: --wda-get-data-format can
+		# time out or return unparsable output, leaving $dataformat empty,
+		# and clearing the latch on that would break a genuine raw-ip modem
+		# in exactly the way the latch exists to prevent.
+		# Without this the latch is one-way: a single earlier raw-ip run
+		# leaves "Y" set forever, the driver then de-frames Ethernet as
+		# bare IP, rx_fixup drops every packet and the downlink is dead
+		# while the uplink still looks healthy. The attribute is rejected
+		# with -EBUSY while the interface is running, so bring it down.
+		echo "Modem is framing 802.3. Clearing stale raw-ip on $ifname .."
+		ip link set dev "$ifname" down
+		echo "N" > /sys/class/net/$ifname/qmi/raw_ip
+		ip link set dev "$ifname" up
 	fi
 
 	uqmi -s -d "$device" -t 1000 --sync > /dev/null 2>&1
@@ -412,6 +521,21 @@ proto_qmi_setup() {
 		[ "$autoconnect" = 1 ] || autoconnect=""
 	fi
 
+	# Never let the modem own the bearer on this board, whatever the config
+	# says. Modem-level autoconnect is persistent (WDS 0x51 lands in NVRAM):
+	# the modem raises the PDN itself, the host's network-start request then
+	# answers "No effect", no host WDS client holds a packet data handle, and
+	# downlink is zero. The stock firmware disables autoconnect first and
+	# connects with its own WDS client, and its start-network carries no
+	# enable-autoconnect TLV -- do the same. With this cleared, ifstatus
+	# reports a real numeric pdh_4 instead of a fabricated handle.
+	dwr921_qmi_board && autoconnect=""
+
+	# Vendor parity: the profile has just been written, so cycle the radio
+	# before asking for a bearer. This is where usbmodem_connect puts it, and
+	# it guarantees no session is in flight when the start request goes out.
+	dwr921_qmi_restart_modem
+
 	[ "$pdptype" = "ip" -o "$pdptype" = "ipv4v6" ] && {
 		cid_4=$(uqmi -s -d "$device" -t 1000 --get-client-id wds)
 		if ! [ "$cid_4" -eq "$cid_4" ] 2> /dev/null; then
@@ -433,10 +557,20 @@ proto_qmi_setup() {
 
 		# pdh_4 is a numeric value on success
 		if ! [ "$pdh_4" -eq "$pdh_4" ] 2> /dev/null; then
-			echo "Unable to connect IPv4"
-			uqmi -s -d "$device" -t 1000 --set-client-id wds,"$cid_4" --release-client-id wds > /dev/null 2>&1
-			proto_notify_error "$interface" CALL_FAILED
-			return 1
+			# With modem autoconnect enabled the modem brings the session up
+			# by itself, so the request above answers "No effect" instead of
+			# a handle. That is an established session, not a failure. Adopt
+			# the all-sessions handle so the address setup below still runs
+			# and teardown stops the session the modem opened.
+			if dwr921_qmi_autoconnect_session "$cid_4"; then
+				echo "IPv4 session already established by modem autoconnect"
+				pdh_4="0xffffffff"
+			else
+				echo "Unable to connect IPv4"
+				uqmi -s -d "$device" -t 1000 --set-client-id wds,"$cid_4" --release-client-id wds > /dev/null 2>&1
+				proto_notify_error "$interface" CALL_FAILED
+				return 1
+			fi
 		fi
 
 		# Check data connection state
@@ -473,10 +607,15 @@ proto_qmi_setup() {
 
 		# pdh_6 is a numeric value on success
 		if ! [ "$pdh_6" -eq "$pdh_6" ] 2> /dev/null; then
-			echo "Unable to connect IPv6"
-			uqmi -s -d "$device" -t 1000 --set-client-id wds,"$cid_6" --release-client-id wds > /dev/null 2>&1
-			proto_notify_error "$interface" CALL_FAILED
-			return 1
+			if dwr921_qmi_autoconnect_session "$cid_6"; then
+				echo "IPv6 session already established by modem autoconnect"
+				pdh_6="0xffffffff"
+			else
+				echo "Unable to connect IPv6"
+				uqmi -s -d "$device" -t 1000 --set-client-id wds,"$cid_6" --release-client-id wds > /dev/null 2>&1
+				proto_notify_error "$interface" CALL_FAILED
+				return 1
+			fi
 		fi
 
 		# Check data connection state

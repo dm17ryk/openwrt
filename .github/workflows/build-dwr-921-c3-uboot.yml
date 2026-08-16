@@ -119,15 +119,40 @@ jobs:
         working-directory: openwrt
         shell: su buildbot -c "bash -euo pipefail {0}"
         run: |
+          # Device-side scripts run on BusyBox ash, so every one of them is
+          # syntax-checked, not just the portctl helper.
           sh -n \
             package/network/utils/dwr921-portctl/files/usr/sbin/dwr921-portctl \
+            package/network/utils/dwr921-internet-led/files/usr/sbin/dwr921-internet-led \
+            package/network/utils/dwr921-internet-led/files/etc/init.d/dwr921-internet-led \
+            package/network/utils/dwr921-diag/files/dwr921-at-probe \
+            package/network/utils/dwr921-diag/files/dwr921-qmi-readonly \
+            package/network/utils/uqmi/files/lib/netifd/proto/qmi.sh \
+            target/linux/ramips/mt7620/base-files/etc/uci-defaults/20_dwr921_c3_uboot_luci \
+            target/linux/ramips/mt7620/base-files/etc/uci-defaults/21_dwr921_c3_uboot_lte \
             tests/dwr921-portctl/test-portctl.sh \
-            tests/dwr921-production/test-image.sh
+            tests/dwr921-runtime/test-port-map.sh \
+            tests/dwr921-runtime/test-review-regressions.sh \
+            tests/dwr921-runtime/test-lte-defaults.sh \
+            tests/dwr921-production/test-image.sh \
+            package/network/utils/dwr921-internet-led/tests/test-dwr921-led-state.sh \
+            package/network/utils/dwr921-internet-led/tests/test-internet-led.sh \
+            package/network/utils/dwr921-diag/tests/test-at-probe.sh \
+            package/network/utils/uqmi/tests/test-dwr921-runtime-fix.sh \
+            package/network/utils/uqmi/tests/test-dwr921-ctl-trace.sh
           cc -std=c11 -Wall -Wextra -Werror \
             tests/dwr921-portctl/test-bmcr.c \
             -o /tmp/dwr921-test-bmcr
           /tmp/dwr921-test-bmcr
+          # Every offline test, so the regression guards actually guard.
           sh tests/dwr921-portctl/test-portctl.sh
+          sh tests/dwr921-runtime/test-port-map.sh
+          sh tests/dwr921-runtime/test-review-regressions.sh
+          sh tests/dwr921-runtime/test-lte-defaults.sh
+          sh package/network/utils/dwr921-internet-led/tests/test-dwr921-led-state.sh
+          sh package/network/utils/dwr921-internet-led/tests/test-internet-led.sh
+          sh package/network/utils/dwr921-diag/tests/test-at-probe.sh
+          sh package/network/utils/uqmi/tests/test-dwr921-runtime-fix.sh
 
       - name: Download sources
         working-directory: openwrt

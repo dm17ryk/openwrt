@@ -1,0 +1,44 @@
+From: AgentK <dmitryko@essencesecurity.com>
+Subject: [PATCH] uqmi: actually transmit WDS Set Autoconnect Settings
+
+cmd_wds_set_autoconnect_settings_prepare() built the request and then returned
+QMI_CMD_DONE, so uqmi exited successfully without ever putting the message on
+the wire: --set-autoconnect was silently a no-op. Return QMI_CMD_REQUEST so the
+request is sent and its response is checked.
+
+Also zero the request struct. It carries two field pairs, status and roaming:
+
+    struct qmi_wds_set_autoconnect_settings_request {
+            struct { unsigned int status : 1; unsigned int roaming : 1; } set;
+            struct { uint8_t status;          uint8_t roaming;          } data;
+    };
+
+Only status was ever assigned, leaving set.roaming and data.roaming as
+uninitialised stack memory. That was harmless while the function returned
+QMI_CMD_DONE and nothing was transmitted, but once the message really goes out
+a stray set.roaming makes uqmi append a roaming-policy TLV carrying a garbage
+value -- nondeterministically, on the one message that decides whether the
+modem or the host owns the packet data session.
+
+Signed-off-by: AgentK <dmitryko@essencesecurity.com>
+---
+--- a/uqmi/commands-wds.c
++++ b/uqmi/commands-wds.c
+@@ -406,7 +406,7 @@
+ static enum qmi_cmd_result
+ cmd_wds_set_autoconnect_settings_prepare(struct qmi_dev *qmi, struct qmi_request *req, struct qmi_msg *msg, char *arg)
+ {
+-	struct qmi_wds_set_autoconnect_settings_request ac_req;
++	struct qmi_wds_set_autoconnect_settings_request ac_req = {};
+ 	const char *modes[] = {
+ 		[QMI_WDS_AUTOCONNECT_SETTING_DISABLED] = "disabled",
+ 		[QMI_WDS_AUTOCONNECT_SETTING_ENABLED] = "enabled",
+@@ -420,7 +420,7 @@
+ 
+ 		qmi_set(&ac_req, status, i);
+ 		qmi_set_wds_set_autoconnect_settings_request(msg, &ac_req);
+-		return QMI_CMD_DONE;
++		return QMI_CMD_REQUEST;
+ 	}
+ 
+ 	uqmi_add_error("Invalid value (valid: disabled, enabled, paused)");

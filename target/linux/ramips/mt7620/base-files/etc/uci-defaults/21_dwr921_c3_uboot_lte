@@ -1,0 +1,53 @@
+#!/bin/sh
+#
+# config_generate only copies device/macaddr/metric/protocol/ipaddr/netmask/vlan
+# out of board.json, and its ncm|qmi|mbim branch hardcodes proto and pdptype.
+# Every other option set by ucidef_set_interface -- apn, auth, mtu, autoconnect
+# -- is silently dropped, so the lte defaults have to be applied here instead.
+#
+# autoconnect stays OFF. Enabling it writes WDS 0x51 into the modem's NVRAM, the
+# modem then raises the PDN itself, the host's own network-start request answers
+# "No effect", and no host WDS client ever owns a packet data handle -- downlink
+# is then zero. With it off the host owns the bearer, exactly as the stock
+# firmware does, and ifstatus reports a real numeric pdh_4.
+#
+# mtu 1420 is the value the carrier specifies for this APN.
+#
+# dhcp is left UNSET so qmi.sh spawns its dynamic <iface>_4 DHCP client. The
+# BM806C is itself the DHCP server on the 802.3 link and only starts delivering
+# downlink once a DHCP exchange has bound the host's MAC; a purely static
+# address suppresses that and the modem answers neither ARP nor IP traffic.
+
+case "$(board_name)" in
+	dlink,dwr-921-c3-uboot)
+		[ -n "$(uci -q get network.lte)" ] || exit 0
+
+		# This also runs on the first boot after a sysupgrade that kept
+		# /etc/config/network, where network.lte is the user's own section
+		# rather than the one config_generate just produced. Only fill in
+		# what is absent, so a customised APN, auth mode, MTU or autoconnect
+		# choice is not silently reverted on every upgrade.
+		pristine=1
+		for opt in apn auth autoconnect mtu; do
+			[ -z "$(uci -q get network.lte.$opt)" ] || pristine=
+		done
+
+		[ -n "$(uci -q get network.lte.apn)" ] ||
+			uci -q set network.lte.apn='uinternet'
+		[ -n "$(uci -q get network.lte.auth)" ] ||
+			uci -q set network.lte.auth='none'
+		[ -n "$(uci -q get network.lte.autoconnect)" ] ||
+			uci -q set network.lte.autoconnect='0'
+		[ -n "$(uci -q get network.lte.mtu)" ] ||
+			uci -q set network.lte.mtu='1420'
+
+		# config_generate never emits dhcp, so this only ever clears a
+		# leftover on a freshly generated section. On a preserved config it
+		# may be a deliberate user setting, so leave it alone there.
+		[ -z "$pristine" ] || uci -q delete network.lte.dhcp
+
+		uci commit network
+		;;
+esac
+
+exit 0
