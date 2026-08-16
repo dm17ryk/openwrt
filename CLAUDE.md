@@ -50,6 +50,7 @@ build. Run them directly from the repo root:
 sh tests/dwr921-portctl/test-portctl.sh              # port helper, with a stubbed swconfig
 sh tests/dwr921-runtime/test-port-map.sh             # external label -> switch port map
 sh tests/dwr921-runtime/test-review-regressions.sh   # firewall zone + LED lifecycle regressions
+sh tests/dwr921-runtime/test-lte-defaults.sh         # uci-defaults seed vs. preserved user config
 sh package/network/utils/dwr921-internet-led/tests/test-dwr921-led-state.sh
 sh package/network/utils/dwr921-diag/tests/test-at-probe.sh
 sh package/network/utils/uqmi/tests/test-dwr921-runtime-fix.sh

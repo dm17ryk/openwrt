@@ -22,13 +22,30 @@ case "$(board_name)" in
 	dlink,dwr-921-c3-uboot)
 		[ -n "$(uci -q get network.lte)" ] || exit 0
 
-		uci -q batch <<-EOF
-			set network.lte.apn='uinternet'
-			set network.lte.auth='none'
-			set network.lte.autoconnect='0'
-			set network.lte.mtu='1420'
-			delete network.lte.dhcp
-		EOF
+		# This also runs on the first boot after a sysupgrade that kept
+		# /etc/config/network, where network.lte is the user's own section
+		# rather than the one config_generate just produced. Only fill in
+		# what is absent, so a customised APN, auth mode, MTU or autoconnect
+		# choice is not silently reverted on every upgrade.
+		pristine=1
+		for opt in apn auth autoconnect mtu; do
+			[ -z "$(uci -q get network.lte.$opt)" ] || pristine=
+		done
+
+		[ -n "$(uci -q get network.lte.apn)" ] ||
+			uci -q set network.lte.apn='uinternet'
+		[ -n "$(uci -q get network.lte.auth)" ] ||
+			uci -q set network.lte.auth='none'
+		[ -n "$(uci -q get network.lte.autoconnect)" ] ||
+			uci -q set network.lte.autoconnect='0'
+		[ -n "$(uci -q get network.lte.mtu)" ] ||
+			uci -q set network.lte.mtu='1420'
+
+		# config_generate never emits dhcp, so this only ever clears a
+		# leftover on a freshly generated section. On a preserved config it
+		# may be a deliberate user setting, so leave it alone there.
+		[ -z "$pristine" ] || uci -q delete network.lte.dhcp
+
 		uci commit network
 		;;
 esac
