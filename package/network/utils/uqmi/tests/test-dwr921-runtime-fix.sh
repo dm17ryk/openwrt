@@ -46,6 +46,15 @@ grep -q "radio_interface\[0\]" "$src" || {
 	exit 1
 }
 
+# --wda-get-data-format can time out or return unparsable output, leaving
+# $dataformat empty. Clearing the driver's raw-ip latch on anything other than
+# an explicit 802.3 answer would desync a genuine raw-ip modem and kill its
+# downlink -- the exact failure the latch handling exists to prevent.
+grep -Fq 'elif [ "$dataformat" = "802.3" ] &&' "$src" || {
+	echo "raw-ip must only be cleared on an explicit 802.3 data format" >&2
+	exit 1
+}
+
 if [ -n "$uqmi_src" ]; then
 	[ -f "$uqmi_src/uqmi/uqmi.h" ] && [ -f "$uqmi_src/uqmi/dev.c" ] || {
 		echo "invalid uqmi source root: $uqmi_src" >&2

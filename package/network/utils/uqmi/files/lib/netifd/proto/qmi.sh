@@ -426,9 +426,14 @@ proto_qmi_setup() {
 
 		echo "Device does not support 802.3 mode. Informing driver of raw-ip only for $ifname .."
 		echo "Y" > /sys/class/net/$ifname/qmi/raw_ip
-	elif [ -f /sys/class/net/$ifname/qmi/raw_ip ] &&
+	elif [ "$dataformat" = "802.3" ] &&
+	     [ -f /sys/class/net/$ifname/qmi/raw_ip ] &&
 	     [ "$(cat /sys/class/net/$ifname/qmi/raw_ip)" = "Y" ]; then
 		# Put the driver back in sync when the modem is framing 802.3.
+		# Only an explicit 802.3 answer counts: --wda-get-data-format can
+		# time out or return unparsable output, leaving $dataformat empty,
+		# and clearing the latch on that would break a genuine raw-ip modem
+		# in exactly the way the latch exists to prevent.
 		# Without this the latch is one-way: a single earlier raw-ip run
 		# leaves "Y" set forever, the driver then de-frames Ethernet as
 		# bare IP, rx_fixup drops every packet and the downlink is dead
