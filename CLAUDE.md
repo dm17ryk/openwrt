@@ -52,6 +52,7 @@ sh tests/dwr921-runtime/test-port-map.sh             # external label -> switch 
 sh tests/dwr921-runtime/test-review-regressions.sh   # firewall zone + LED lifecycle regressions
 sh tests/dwr921-runtime/test-lte-defaults.sh         # uci-defaults seed vs. preserved user config
 sh package/network/utils/dwr921-internet-led/tests/test-dwr921-led-state.sh
+sh package/network/utils/dwr921-internet-led/tests/test-internet-led.sh
 sh package/network/utils/dwr921-diag/tests/test-at-probe.sh
 sh package/network/utils/uqmi/tests/test-dwr921-runtime-fix.sh
 
@@ -60,10 +61,16 @@ cc -std=c11 -Wall -Wextra -Werror tests/dwr921-portctl/test-bmcr.c -o /tmp/test-
 # after a build: validates uImage header, derived SquashFS boundary, manifest, size bounds
 tests/dwr921-production/test-image.sh bin/targets/ramips/mt7620 \
   openwrt-ramips-mt7620-dlink_dwr-921-c3-uboot
+
+# after a build: needs the patched uqmi source tree, so it is not part of the offline set
+sh package/network/utils/uqmi/tests/test-dwr921-ctl-trace.sh \
+  build_dir/target-mipsel_24kc_musl/uqmi-*
 ```
 
-Shell scripts are also syntax-checked in CI with `sh -n`. Keep new scripts POSIX `sh` — they run
-on BusyBox on the device.
+Every script above, plus the device-side helpers under `package/network/utils/dwr921-*/files/`,
+`package/network/utils/uqmi/files/` and the ramips `uci-defaults/`, is syntax-checked in CI with
+`sh -n`, and the whole offline set is executed there. Keep new scripts POSIX `sh` — they run on
+BusyBox on the device — and add new tests to the workflow's "Run offline source tests" step.
 
 CI (`.github/workflows/build-dwr-921-c3-uboot.yml`) runs the offline tests, then a full firmware
 build inside the OpenWrt buildbot container, then `test-image.sh`, then stages release files with
